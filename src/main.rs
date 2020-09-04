@@ -590,6 +590,7 @@ fn main() {
    let args: Vec<String> = env::args().collect();
     let toml = if args.contains(&"--large".to_owned()) {
         //214s as of 10:25 using one core- python needs 818 using
+        //183 as of 15:58
 "
 output_dir = 'tests/ERR329501'
 [samples]
@@ -810,6 +811,7 @@ output_dir = 'tests/test_sample_data'
         super::snp_diff_from_toml(toml).unwrap();
         let should =
             std::fs::read_to_string("sample_data/marsnpdiff_sample_a_vs_sample_b.tsv").unwrap();
+        let should = should.replace(".0", "");
         let actual = std::fs::read_to_string("tests/test_sample_data/A_vs_B.tsv").unwrap();
         assert_eq!(should, actual)
     }
