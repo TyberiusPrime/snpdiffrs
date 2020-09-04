@@ -64,28 +64,6 @@ fn vector_arg_max(input: &[f32;11]) -> (f32, usize) {
 // so we might as well stick to u32 for now.
 struct Coverage(Array2<u32>); 
 
-struct HaplotypeLogLikelihoods(Array2<f32>);
-
-impl HaplotypeLogLikelihoods {
-    fn new(length: usize) -> HaplotypeLogLikelihoods {
-        HaplotypeLogLikelihoods(Array2::zeros((length, 11)))
-    }
-
-    ///calculate max and argmax from the result of logLikelihood
-    fn max_and_argmax(&self) -> (Array1<f32>, Array1<u8>) {
-        let n = self.0.len();
-        let mut maxima: Array1<f32> = Array1::zeros((n,));
-        let mut arg_maxima: Array1<u8> = Array1::zeros((n,));
-        for ii in 0..n {
-            let row = &self.0.index_axis(Axis(0), ii);
-            maxima[ii] = *row.max().unwrap();
-            arg_maxima[ii] = row.argmax().unwrap() as u8;
-        }
-
-        (maxima, arg_maxima)
-    }
-}
-
 #[derive(Debug)]
 struct ResultRow {
     relative_pos: u32,
@@ -133,19 +111,9 @@ impl Coverage {
         start: u32,
         stop: u32,
         quality_threshold: u8,
-        filter_homo_polymer_threshold: Option<u8>,
+        filter_homo_polymer_threshold: &Option<u8>,
     ) -> Coverage {
-        let length: u64 = (stop - start).try_into().expect("stop < start");
-        let mut result: Coverage = Coverage::new(length as usize);
-        result.update_from_bam(
-            filename,
-            tid,
-            start,
-            stop,
-            quality_threshold,
-            &filter_homo_polymer_threshold,
-        );
-        result
+        Coverage::from_bams(&vec![filename], tid, start, stop, quality_threshold, filter_homo_polymer_threshold)
     }
 
     fn from_bams<P: AsRef<Path>>(
@@ -650,7 +618,7 @@ mod test {
         use super::{Coverage, BASE_A, BASE_C, BASE_G, BASE_T};
         let filename = std::path::Path::new("sample_data/sample_a.bam");
         let start: usize = 10400;
-        let cov = Coverage::from_bam(&filename, 0u32, start as u32, (start + 200) as u32, 0, None);
+        let cov = Coverage::from_bam(&filename, 0u32, start as u32, (start + 200) as u32, 0, &None);
         assert!(cov.len() == 200);
         assert!(cov.0[[10556 - start, BASE_A]] == 0);
         assert!(cov.0[[10556 - start, BASE_C]] == 0);
