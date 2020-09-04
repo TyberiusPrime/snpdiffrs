@@ -126,8 +126,9 @@ impl Coverage {
     ) -> Self {
         let length: u64 = (stop - start).try_into().expect("stop < start");
         let mut result: Coverage = Coverage::new(length as usize);
+        let mut any = false;
         for filename in bams {
-            result.update_from_bam(
+            any |= result.update_from_bam(
                 filename,
                 tid,
                 start,
@@ -136,7 +137,12 @@ impl Coverage {
                 filter_homo_polymer_threshold,
             );
         }
-        result
+        if any {
+            result
+        } else {
+            Coverage::new(0)
+        }
+
     }
 
     fn update_from_bam<P: AsRef<Path>>(
@@ -147,7 +153,7 @@ impl Coverage {
         stop: u32,
         quality_threshold: u8,
         filter_homo_polymer_threshold: &Option<u8>,
-    ) {
+    ) -> bool{
         let mut bam = bam::IndexedReader::from_path(filename).expect("Could not read input bam");
         let start = start as i64;
         let stop = stop as i64;
@@ -159,6 +165,7 @@ impl Coverage {
         */
         bam.fetch(tid, start as u64, stop as u64).unwrap();
         let mut read: bam::Record = bam::Record::new();
+        let mut any = false;
         while let Ok(true) = bam.read(&mut read) {
             if (read.flags()
                 & (htslib::BAM_FUNMAP
@@ -188,6 +195,7 @@ impl Coverage {
                 if read.qual()[*read_pos as usize] < quality_threshold {
                     continue;
                 }
+                any = true;
                 let base: u8 = seq.encoded_base((*read_pos) as usize);
                 //base is a 4 bit integer, 0..15 mapping to
                 //= 0
@@ -217,6 +225,7 @@ impl Coverage {
                 self.0[[(genome_pos - start) as usize, out_base]] += 1;
             }
         }
+        any
     }
 
     fn len(self: &Self) -> usize {
@@ -311,8 +320,11 @@ impl Coverage {
         (vector_arg_max(&lls), lls[other])
     }
 
-    fn score_differences(&self, other: &Self) -> Vec<ResultRow> {
+    fn score_differences(&self, other: &Self, min_score: f32) -> Vec<ResultRow> {
         let length = self.len();
+        if length == 0 || other.len() == 0 {
+            return Vec::new();
+        }
         let mut result = Vec::new();
         for ii in 0..length {
             // this is a huge speed up for sparse bams.
@@ -358,21 +370,22 @@ impl Coverage {
             let ll_same_haplotype_b = self_other_argmax + other_max;
             let ll_same = ll_same_haplotype_a.max(ll_same_haplotype_b);
             let score = ll_differing - ll_same;
-
-            result.push(ResultRow {
-                relative_pos: ii as u32,
-                count_self_a: self.0[[ii, BASE_A]],
-                count_self_c: self.0[[ii, BASE_C]],
-                count_self_g: self.0[[ii, BASE_G]],
-                count_self_t: self.0[[ii, BASE_T]],
-                count_other_a: other.0[[ii, BASE_A]],
-                count_other_c: other.0[[ii, BASE_C]],
-                count_other_g: other.0[[ii, BASE_G]],
-                count_other_t: other.0[[ii, BASE_T]],
-                haplotype_self: self_argmax as u8,
-                haplotype_other: other_argmax as u8,
-                score,
-            });
+            if score >= min_score {
+                result.push(ResultRow {
+                    relative_pos: ii as u32,
+                    count_self_a: self.0[[ii, BASE_A]],
+                    count_self_c: self.0[[ii, BASE_C]],
+                    count_self_g: self.0[[ii, BASE_G]],
+                    count_self_t: self.0[[ii, BASE_T]],
+                    count_other_a: other.0[[ii, BASE_A]],
+                    count_other_c: other.0[[ii, BASE_C]],
+                    count_other_g: other.0[[ii, BASE_G]],
+                    count_other_t: other.0[[ii, BASE_T]],
+                    haplotype_self: self_argmax as u8,
+                    haplotype_other: other_argmax as u8,
+                    score,
+                });
+            }
         }
         result
     }
@@ -408,6 +421,7 @@ struct RunConfig {
     #[serde(default = "default_quality_threshold")]
     quality_threshold: u8,
     filter_homo_polymer_threshold: Option<u8>,
+    min_score: Option<f32>
 }
 
 fn snp_diff_from_toml(input: &str) -> Result<(), ()> {
@@ -452,11 +466,12 @@ fn run_snp_diff(config: RunConfig) -> Result<(), ()> {
 
         let quality_threshold = config.quality_threshold;
         let filter_homo_polymer_threshold = config.filter_homo_polymer_threshold.clone();
+        let min_score = config.min_score.unwrap_or(50.0);
 
         let chunks = chunked_genome::ChunkedGenome::new(first_bam, &config.chromosomes);
         for chunk in chunks.iter(50_000_000) {
             let cov = get_coverages(&config, &chunk, quality_threshold, &filter_homo_polymer_threshold);
-            calculate_differences(&cov, &pairs, &mut output_handles, &chunk);
+            calculate_differences(&cov, &pairs, &mut output_handles, &chunk, min_score);
         }
     }
     //files are now closed. rename them all
@@ -493,9 +508,9 @@ fn get_coverages(config: &RunConfig, chunk: &chunked_genome::Chunk, quality_thre
                 })
                 .collect()}
 
-fn calculate_differences(coverages: &HashMap<String, Coverage>, pairs: &Vec<Vec<&String>>, output_handles: &mut Vec<std::fs::File>, chunk: &chunked_genome::Chunk) {
+fn calculate_differences(coverages: &HashMap<String, Coverage>, pairs: &Vec<Vec<&String>>, output_handles: &mut Vec<std::fs::File>, chunk: &chunked_genome::Chunk, min_score: f32) {
             for (ii, pair) in pairs.iter().enumerate() {
-                let delta = coverages[pair[0]].score_differences(&coverages[pair[1]]);
+                let delta = coverages[pair[0]].score_differences(&coverages[pair[1]], min_score);
                 if !delta.is_empty() {
                     write_results(&mut output_handles[ii], &chunk.chr, chunk.start, delta);
                 }
@@ -576,7 +591,7 @@ fn main() {
     let toml = if args.contains(&"--large".to_owned()) {
         //214s as of 10:25 using one core- python needs 818 using
 "
-output_dir = 'tests/test_sample_data'
+output_dir = 'tests/ERR329501'
 [samples]
     A = ['sample_data/ERR329501.bam']
     B = ['sample_data/GSM1553106.bam']
@@ -590,16 +605,16 @@ output_dir = 'tests/test_sample_data'
         "
 
     } else
-    { // takes about 50 seconds as of 10:25
+    { // takes about 50 seconds as of 10:25 // down to 3 seconds at 15:30
 "
-output_dir = 'tests/test_sample_data'
+output_dir = 'tests/ERR329501_chr4'
 [samples]
     A = ['sample_data/ERR329501_chr4.bam']
     B = ['sample_data/GSM1553106_chr4.bam']
 "
     };
     use std::path::Path;
-    let output_dir = Path::new("tests/test_sample_data");
+    let output_dir = Path::new("tests/");
     if output_dir.exists() {
         std::fs::remove_dir_all(output_dir).ok();
     }
@@ -751,7 +766,7 @@ mod test {
             vec![0, 0, 0, 0],
             vec![0, 0, 100, 0],
         );
-        let res = cov_a.score_differences(&cov_b);
+        let res = cov_a.score_differences(&cov_b, 0.0);
         assert!(res.len() == 3);
         assert_eq!(res[0].relative_pos, 0);
         assert_eq!(res[1].relative_pos, 2);
@@ -773,7 +788,7 @@ mod test {
         use approx::AbsDiffEq;
         let cov_a = Coverage::from_counts(vec![0, 51], vec![0, 0], vec![51, 0], vec![0, 0]);
         let cov_b = Coverage::from_counts(vec![0, 0], vec![0, 0], vec![0, 0], vec![51, 51]);
-        let res = cov_a.score_differences(&cov_b);
+        let res = cov_a.score_differences(&cov_b, 0.);
         assert_eq!(res[0].score, res[1].score);
         assert!(res[0].score.abs_diff_eq(&408.2737f32, 1e-4))
     }

@@ -8,9 +8,7 @@ edition = "2018"
 
 [dependencies]
 rust-htslib="0.32.0"
-ndarray = { version = "0.13.1", features = ["blas", "approx"] }
-blas-src = { version = "0.2.0", default-features = false, features = ["openblas"] }
-openblas-src = { version = "0.6.0", default-features = false, features = ["cblas", "system"] }
+ndarray = { version = "0.13.1", features = ["approx"] }
 lazy_static = "1.4.0"
 approx = "0.3.2"
 serde_derive = "1.0.115"

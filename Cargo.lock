@@ -39,15 +39,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "blas-src"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7b894d1cc14af76750a80f64387f7986fe93a9d3786a9a8926a340ae50b2c51"
-dependencies = [
- "openblas-src",
-]
-
-[[package]]
 name = "bzip2-sys"
 version = "0.1.9+1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -56,15 +47,6 @@ dependencies = [
  "cc",
  "libc",
  "pkg-config",
-]
-
-[[package]]
-name = "cblas-sys"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6feecd82cce51b0204cf063f0041d69f24ce83f680d87514b004248e7b0fa65"
-dependencies = [
- "libc",
 ]
 
 [[package]]
@@ -294,8 +276,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac06db03ec2f46ee0ecdca1a1c34a99c0d188a0d83439b84bf0cb4b386e4ab09"
 dependencies = [
  "approx",
- "blas-src",
- "cblas-sys",
  "matrixmultiply",
  "num-complex",
  "num-integer",
@@ -364,12 +344,6 @@ checksum = "ac267bcc07f48ee5f8935ab0d24f316fb722d7a1292e2913f0cc196b29ffd611"
 dependencies = [
  "autocfg",
 ]
-
-[[package]]
-name = "openblas-src"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af5265a3d795f0624d3e3756cb484da70f8bfbf409ce23d9035ffc8574297aad"
 
 [[package]]
 name = "openssl-src"
@@ -560,12 +534,10 @@ name = "snpdiffrs"
 version = "0.1.0"
 dependencies = [
  "approx",
- "blas-src",
  "itertools 0.9.0",
  "lazy_static",
  "ndarray",
  "ndarray-stats",
- "openblas-src",
  "rust-htslib",
  "serde",
  "serde_derive",
