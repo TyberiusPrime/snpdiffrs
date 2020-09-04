@@ -347,7 +347,8 @@ impl Coverage {
         let length = self.len();
         let mut result = Vec::new();
         for ii in 0..length {
-            /* this is a huge speed up for sparse bams).
+            // this is a huge speed up for sparse bams.
+            // and all rnaseqs are sparse, right
             if (self.0[[ii, BASE_A]] == 0
                 && self.0[[ii, BASE_C]] == 0
                 && self.0[[ii, BASE_G]] == 0
@@ -355,23 +356,15 @@ impl Coverage {
                 || (other.0[[ii, BASE_A]] == 0
                     && other.0[[ii, BASE_C]] == 0
                     && other.0[[ii, BASE_G]] == 0
-                    && other.0[[ii, BASE_T]] == 0)
-            {
+                    && other.0[[ii, BASE_T]] == 0) {
                 continue;
             }
-            */
-
             let (self_max, self_argmax) = Coverage::single_log_likelihood_max_arg_max(
                 self.0[[ii, BASE_A]],
                 self.0[[ii, BASE_C]],
                 self.0[[ii, BASE_G]],
                 self.0[[ii, BASE_T]],
             );
-            if self_max == 0.0f32 { //todo remove if checking above
-                // check if it's faster to test the counts
-                // no reads
-                continue;
-            }
             let ((other_max, other_argmax), other_self_argmax) =
                 Coverage::single_log_likelihood_max_arg_max_plus_other(
                     other.0[[ii, BASE_A]],
@@ -380,10 +373,6 @@ impl Coverage {
                     other.0[[ii, BASE_T]],
                     self_argmax,
                 );
-            if other_max == 0.0f32 { //todo remove if checking above
-                // no reads
-                continue;
-            }
             if self_argmax == other_argmax {
                 // no disagreement
                 continue;
@@ -614,12 +603,33 @@ fn chromosomes_from_bam(bam: &mut bam::IndexedReader) -> Vec<u32> {
 }
 
 fn main() {
-    let toml = "
+    use std::env;
+   let args: Vec<String> = env::args().collect();
+    let toml = if args.contains(&"--large".to_owned()) {
+        //214s as of 10:25 using one core- python needs 818 using
+"
 output_dir = 'tests/test_sample_data'
 [samples]
-    A = ['sample_data/sample_a.bam']
-    B = ['sample_data/sample_b.bam']
-";
+    A = ['sample_data/ERR329501.bam']
+    B = ['sample_data/GSM1553106.bam']
+"
+    } else if args.contains(&"--tiny".to_owned())  {
+        "
+        output_dir = 'tests/test_sample_data'
+        [samples]
+            A = ['sample_data/sample_a.bam']
+            B = ['sample_data/sample_b.bam']
+        "
+
+    } else
+    { // takes about 50 seconds as of 10:25
+"
+output_dir = 'tests/test_sample_data'
+[samples]
+    A = ['sample_data/ERR329501_chr4.bam']
+    B = ['sample_data/GSM1553106_chr4.bam']
+"
+    };
     use std::path::Path;
     let output_dir = Path::new("tests/test_sample_data");
     if output_dir.exists() {
@@ -627,10 +637,6 @@ output_dir = 'tests/test_sample_data'
     }
     std::fs::create_dir_all(output_dir).unwrap();
     snp_diff_from_toml(toml).unwrap();
-    let should =
-        std::fs::read_to_string("sample_data/marsnpdiff_sample_a_vs_sample_b.tsv").unwrap();
-    let actual = std::fs::read_to_string("tests/test_sample_data/A_vs_B.tsv").unwrap();
-    assert_eq!(should, actual);
     println!("Hello, world!");
 }
 
