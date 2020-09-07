@@ -32,24 +32,28 @@ fn vector_arg_max(input: &[f32; 11]) -> (f32, usize) {
 //
 // there is no apperant perfomance difference between u32 + cast and f32 counting
 // so we might as well stick to u32 for now.
-pub struct Coverage(Array2<u32>);
+pub struct Coverage(Array2<u16>);
 
 #[derive(Debug)]
 pub struct ResultRow {
     pub relative_pos: u32,
-    pub count_self_a: u32,
-    pub count_self_c: u32,
-    pub count_self_g: u32,
-    pub count_self_t: u32,
-    pub count_other_a: u32,
-    pub count_other_c: u32,
-    pub count_other_g: u32,
-    pub count_other_t: u32,
+    pub count_self_a: u16,
+    pub count_self_c: u16,
+    pub count_self_g: u16,
+    pub count_self_t: u16,
+    pub count_other_a: u16,
+    pub count_other_c: u16,
+    pub count_other_g: u16,
+    pub count_other_t: u16,
     pub score: f32,
     pub haplotype_self: u8,
     pub haplotype_other: u8,
 }
 
+fn u32_to_u16_saturating(input: u32) -> u16
+{
+    if input > u16::MAX as u32 { u16::MAX } else { input as u16}
+}
 impl Coverage {
     pub fn new(length: usize) -> Coverage {
         Coverage(Array2::zeros((length, 4)))
@@ -68,10 +72,10 @@ impl Coverage {
         }
         let mut res = Array2::zeros((len, 4));
         for ii in 0..len {
-            res[[ii, 0]] = count_a[ii];
-            res[[ii, 1]] = count_c[ii];
-            res[[ii, 2]] = count_g[ii];
-            res[[ii, 3]] = count_t[ii];
+            res[[ii, 0]] = u32_to_u16_saturating(count_a[ii]);
+            res[[ii, 1]] = u32_to_u16_saturating(count_c[ii]);
+            res[[ii, 2]] = u32_to_u16_saturating(count_g[ii]);
+            res[[ii, 3]] = u32_to_u16_saturating(count_t[ii]);
         }
         Coverage(res)
     }
@@ -211,10 +215,10 @@ impl Coverage {
     }
 
     pub fn single_log_likelihood(
-        count_a: u32,
-        count_c: u32,
-        count_g: u32,
-        count_t: u32,
+        count_a: u16,
+        count_c: u16,
+        count_g: u16,
+        count_t: u16,
         which: usize,
     ) -> f32 {
         let a = count_a as f32;
@@ -267,10 +271,10 @@ impl Coverage {
     }
 
     fn single_log_likelihood_max_arg_max(
-        count_a: u32,
-        count_c: u32,
-        count_g: u32,
-        count_t: u32,
+        count_a: u16,
+        count_c: u16,
+        count_g: u16,
+        count_t: u16,
     ) -> (f32, usize) {
         //we calculate all 11, keep only the the max and argmax.
         //we need another one later one, which we calculate by hand.
@@ -286,10 +290,10 @@ impl Coverage {
     }
 
     fn single_log_likelihood_max_arg_max_plus_other(
-        count_a: u32,
-        count_c: u32,
-        count_g: u32,
-        count_t: u32,
+        count_a: u16,
+        count_c: u16,
+        count_g: u16,
+        count_t: u16,
         other: usize,
     ) -> ((f32, usize), f32) {
         let lls = Coverage::ll(
@@ -307,45 +311,37 @@ impl Coverage {
             return Vec::new();
         }
         let mut result = Vec::new();
-        for ii in 0..length {
+        for (ii, (self_row, other_row)) in self
+            .0
+            .axis_iter(Axis(0))
+            .zip(other.0.axis_iter(Axis(0)))
+            .enumerate()
+        {
             // this is a huge speed up for sparse bams.
             // and all rnaseqs are sparse, right
-            if (self.0[[ii, BASE_A]] == 0
-                && self.0[[ii, BASE_C]] == 0
-                && self.0[[ii, BASE_G]] == 0
-                && self.0[[ii, BASE_T]] == 0)
-                || (other.0[[ii, BASE_A]] == 0
-                    && other.0[[ii, BASE_C]] == 0
-                    && other.0[[ii, BASE_G]] == 0
-                    && other.0[[ii, BASE_T]] == 0)
-            {
+            let sa = self_row[BASE_A];
+            let sc = self_row[BASE_C];
+            let sg = self_row[BASE_G];
+            let st = self_row[BASE_T];
+            if sa == 0 && sc == 0 && sg == 0 && st == 0 {
                 continue;
             }
-            let (self_max, self_argmax) = Coverage::single_log_likelihood_max_arg_max(
-                self.0[[ii, BASE_A]],
-                self.0[[ii, BASE_C]],
-                self.0[[ii, BASE_G]],
-                self.0[[ii, BASE_T]],
-            );
+            let oa = other_row[BASE_A];
+            let oc = other_row[BASE_C];
+            let og = other_row[BASE_G];
+            let ot = other_row[BASE_T];
+            if oa == 0 && oc == 0 && og == 0 && ot == 0 {
+                continue;
+            }
+            let (self_max, self_argmax) =
+                Coverage::single_log_likelihood_max_arg_max(sa, sg, sc, st);
             let ((other_max, other_argmax), other_self_argmax) =
-                Coverage::single_log_likelihood_max_arg_max_plus_other(
-                    other.0[[ii, BASE_A]],
-                    other.0[[ii, BASE_C]],
-                    other.0[[ii, BASE_G]],
-                    other.0[[ii, BASE_T]],
-                    self_argmax,
-                );
+                Coverage::single_log_likelihood_max_arg_max_plus_other(oa, oc, og, ot, self_argmax);
             if self_argmax == other_argmax {
                 // no disagreement
                 continue;
             }
-            let self_other_argmax = Coverage::single_log_likelihood(
-                self.0[[ii, BASE_A]],
-                self.0[[ii, BASE_C]],
-                self.0[[ii, BASE_G]],
-                self.0[[ii, BASE_T]],
-                other_argmax,
-            );
+            let self_other_argmax = Coverage::single_log_likelihood(sa, sc, sg, st, other_argmax);
 
             let ll_differing = self_max + other_max;
             let ll_same_haplotype_a = self_max + other_self_argmax;
@@ -355,14 +351,14 @@ impl Coverage {
             if score >= min_score {
                 result.push(ResultRow {
                     relative_pos: ii as u32,
-                    count_self_a: self.0[[ii, BASE_A]],
-                    count_self_c: self.0[[ii, BASE_C]],
-                    count_self_g: self.0[[ii, BASE_G]],
-                    count_self_t: self.0[[ii, BASE_T]],
-                    count_other_a: other.0[[ii, BASE_A]],
-                    count_other_c: other.0[[ii, BASE_C]],
-                    count_other_g: other.0[[ii, BASE_G]],
-                    count_other_t: other.0[[ii, BASE_T]],
+                    count_self_a: sa,
+                    count_self_c: sc,
+                    count_self_g: sg,
+                    count_self_t: st,
+                    count_other_a: oa,
+                    count_other_c: oc,
+                    count_other_g: og,
+                    count_other_t: ot,
                     haplotype_self: self_argmax as u8,
                     haplotype_other: other_argmax as u8,
                     score,

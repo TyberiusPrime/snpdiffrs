@@ -62,6 +62,7 @@ pub fn run_snp_diff(config: RunConfig) -> Result<(), ()> {
         let mut output_handles: Vec<_> = output_filenames
             .iter()
             .map(|filename| std::fs::File::create(filename).unwrap())
+            .map(|handle| std::io::BufWriter::new(handle))
             .collect();
 
         let quality_threshold = config.quality_threshold;
@@ -122,7 +123,7 @@ fn get_coverages(
 fn calculate_differences(
     coverages: &HashMap<String, Coverage>,
     pairs: &Vec<Vec<&String>>,
-    output_handles: &mut Vec<std::fs::File>,
+    output_handles: &mut Vec<std::io::BufWriter<std::fs::File>>,
     chunk: &chunked_genome::Chunk,
     min_score: f32,
 ) {
@@ -135,7 +136,7 @@ fn calculate_differences(
 }
 
 fn write_results(
-    output_handle: &mut std::fs::File,
+    output_handle: &mut std::io::BufWriter<std::fs::File>,
     chr: &str,
     chunk_start: u32,
     rows: Vec<ResultRow>,
