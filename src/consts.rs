@@ -1,0 +1,15 @@
+pub const BASE_A: usize = 0;
+pub const BASE_C: usize = 1;
+pub const BASE_G: usize = 2;
+pub const BASE_T: usize = 3;
+pub const AA: usize = 0;
+pub const CC: usize = 1;
+pub const GG: usize = 2;
+pub const TT: usize = 3;
+pub const AC: usize = 4;
+pub const AG: usize = 5;
+pub const AT: usize = 6;
+pub const CG: usize = 7;
+pub const CT: usize = 8;
+pub const GT: usize = 9;
+pub const NN: usize = 10;
