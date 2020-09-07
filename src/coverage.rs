@@ -29,9 +29,10 @@ fn vector_arg_max(input: &[f32; 11]) -> (f32, usize) {
     }
     (max, argmax)
 }
-//
-// there is no apperant perfomance difference between u32 + cast and f32 counting
-// so we might as well stick to u32 for now.
+/// Central 'count and store Coverage type
+/// we only count to u16 (65k) to same on memory.
+/// At those sequencing depths we overrun our f32
+/// probably anyhow.
 pub struct Coverage(Array2<u16>);
 
 #[derive(Debug)]
@@ -50,14 +51,22 @@ pub struct ResultRow {
     pub haplotype_other: u8,
 }
 
-fn u32_to_u16_saturating(input: u32) -> u16
-{
-    if input > u16::MAX as u32 { u16::MAX } else { input as u16}
+fn u32_to_u16_saturating(input: u32) -> u16 {
+    if input > u16::MAX as u32 {
+        u16::MAX
+    } else {
+        input as u16
+    }
 }
 impl Coverage {
     pub fn new(length: usize) -> Coverage {
         Coverage(Array2::zeros((length, 4)))
     }
+
+    /*pub fn clear(&mut self) {
+        self.0.fill(0);
+    }
+    */
 
     #[allow(dead_code)]
     pub fn from_counts(
@@ -81,8 +90,8 @@ impl Coverage {
     }
 
     #[allow(dead_code)]
-    pub fn from_bam<P: AsRef<Path>>(
-        filename: P,
+    pub fn from_bam(
+        filename: &Path,
         tid: u32,
         start: u32,
         stop: u32,
@@ -99,8 +108,8 @@ impl Coverage {
         )
     }
 
-    pub fn from_bams<P: AsRef<Path>>(
-        bams: &Vec<P>,
+    pub fn from_bams(
+        bams: &Vec<&Path>,
         tid: u32,
         start: u32,
         stop: u32,
