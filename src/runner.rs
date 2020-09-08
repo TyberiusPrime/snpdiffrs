@@ -142,7 +142,6 @@ fn haplotype_const_to_str(haplotype: u8) -> &'static str {
     }
 }
 
-
 #[allow(dead_code)]
 fn get_logger() -> slog::Logger {
     use slog::{o, Drain};
@@ -223,7 +222,7 @@ impl NtoNRunner {
     }
 
     fn run(self) {
-        let log = get_logger();
+        //let log = get_logger();
 
         //input
         let mut blocks: Vec<Block> = Vec::new(); //the currently loaded blocks.
@@ -303,17 +302,17 @@ impl NtoNRunner {
         let mut quit_counter = 0;
         thread::scope(|s| {
         let block_iterator = block_iterator.clone();
-        for nn in 0..ncores {
+        for _nn in 0..ncores {
             let thread_recv = todo_receiver.clone();
             let result_sender = result_sender.clone();
-            let log = log.clone();
+            //let log = log.clone();
             s.spawn(move |_s2| {
                 //so this is what happens in the worker threads.
                 for el in thread_recv {
                     match el {
                         ToDo::LoadCoverage(input_filenames, input_no, chunk, chunk_no) => {
                             //info!(log, "exc: Load_coverage: c:{} i:{}", chunk_no, input_no);
-                            info!(log, "Loading {} {}", chunk.chr, chunk.start);
+                            //info!(log, "Loading {} {}", chunk.chr, chunk.start);
                             result_sender
                                 .send(JobResult::LoadedCoverage(
                                     chunk_no,
@@ -332,13 +331,13 @@ impl NtoNRunner {
                         ToDo::CalcSnps(chunk_id, pair, cov, other_cov, chunk) => {
                             let result: Vec<ResultRow> = other_cov.score_differences(cov.as_ref(), min_score, chunk.start);
                             //info!(log, "exc: calc snps c: {}, pair: {:?}, result_len: {}", chunk_id, pair, result.len());
-                            info!(log, "Calced {}, {}" ,chunk.chr, chunk.start);
+                            //info!(log, "Calced {}, {}" ,chunk.chr, chunk.start);
                             result_sender.send(
                                 JobResult::CalculatedSnps(chunk_id, pair, result, chunk)).expect("Could not send CalculatedSnps");
                         }
                         ToDo::OutputResult(result_rows, chunk, output) => {
                             //info!(log, "exc: output results for chr: {}, start: {}, count: {}, first entry: {}", chunk.chr, chunk.start, result_rows.len(), if result_rows.is_empty() {0} else {result_rows[0].relative_pos});
-                            info!(log, "writing {}, {}", chunk.chr, chunk.start);
+                            //info!(log, "writing {}, {}", chunk.chr, chunk.start);
                             write_results(
                                 &mut output.lock().unwrap(),
                                 &chunk.chr,
@@ -346,7 +345,7 @@ impl NtoNRunner {
                             result_sender.send(JobResult::OutputDone).expect("could not signal OutputDone");
                         }
                         ToDo::Quit => {
-                            info!(log, "exc: quit: {}", nn);
+                            //info!(log, "exc: quit: {}", nn);
                             result_sender.send(JobResult::QuitDone).expect("Could not send QuitDone");
                             return;
                         }
@@ -361,7 +360,7 @@ impl NtoNRunner {
                 JobResult::LoadedCoverage(chunk_id, input_id, cov, chunk) => {
                     //Todo: optimize by not putting empty blocks into the pool
                     //info!(log, "Loadeded Coverage {} {}", chunk_id, input_id);
-                    info!(log, "loaded {} {}", chunk.chr, chunk.start);
+                    //info!(log, "loaded {} {}", chunk.chr, chunk.start);
                     load_progress.add(1usize);
                     if load_progress.has_progressed_significantly() {
                         print!("\r{}", load_progress);
@@ -382,7 +381,7 @@ impl NtoNRunner {
                                     else  {
                                         (input_id, block.input_id, block.coverage.clone(), cov.clone())
                                     };
-                                info!( log, "Sending pair {} {} for chunk {} {}", a, b, chunk.chr, chunk.start);
+                                //info!( log, "Sending pair {} {} for chunk {} {}", a, b, chunk.chr, chunk.start);
                                 todo_sender
                                     .send(ToDo::CalcSnps(
                                             chunk_id,
@@ -480,7 +479,7 @@ impl NtoNRunner {
                 )
                 .unwrap()
             })
-            .for_each(|_|{});
+            .for_each(|_| {});
     }
 }
 

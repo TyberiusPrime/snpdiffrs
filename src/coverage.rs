@@ -142,8 +142,40 @@ impl Coverage {
             Coverage::new(0)
         }
     }
+    //read start,stop, genome start, stop aligned blocks
+    //replaces aligned_pairs with just the ends
+    //and such safes on allocations.
+    fn aligned_blocks(record: &bam::Record) -> Vec<(i64, i64, i64, i64)> {
+        use rust_htslib::bam::record::Cigar;
+        let mut result = Vec::new();
 
-    fn update_from_bam<P: AsRef<Path>>(
+        let mut pos: i64 = record.pos();
+        let mut qpos: i64 = 0;
+        for entry in record.cigar().iter() {
+            match entry {
+                Cigar::Match(len) | Cigar::Equal(len) | Cigar::Diff(len) => {
+                    let qstart = qpos;
+                    let qend = qstart + *len as i64;
+                    let rstart = pos;
+                    let rend = pos + *len as i64;
+                    result.push((qstart, qend, rstart, rend + 1));
+                    qpos += *len as i64;
+                    pos += *len as i64;
+                }
+                Cigar::Ins(len) | Cigar::SoftClip(len) => {
+                    qpos += *len as i64;
+                }
+                Cigar::Del(len) | Cigar::RefSkip(len) => {
+                    pos += *len as i64;
+                }
+                Cigar::HardClip(_) => {} // no advance
+                Cigar::Pad(_) => panic!("Padding (Cigar::Pad) is not supported."), //padding is only used for multiple sequence alignment
+            }
+        }
+        result
+    }
+
+    fn update_from_bam<P: AsRef<Path> + std::fmt::Debug + Clone>(
         &mut self,
         filename: P,
         tid: u32,
@@ -174,8 +206,9 @@ impl Coverage {
             {
                 continue;
             }
-            for [read_pos, genome_pos] in read.aligned_pairs().iter() {
-                if (*genome_pos < start) || *genome_pos >= stop {
+            //for [read_pos, genome_pos] in read.aligned_pairs().iter() {
+            for (qstart, qend, genome_start, genome_end) in Coverage::aligned_blocks(&read).iter() {
+                if (*genome_end < start) || *genome_start >= stop {
                     // if this block is outside of the region
                     // don't count it at all.
                     // if it is on a block boundary
@@ -184,38 +217,46 @@ impl Coverage {
                     // of our intervals.
                     continue;
                 }
-                if read.qual()[*read_pos as usize] <= quality_threshold {
-                    continue;
+                for (read_pos, genome_pos) in (*qstart..*qend).zip(*genome_start..*genome_end) {
+                    if (genome_pos - start) as usize > self.len() - 1 {
+                        continue;
+                    }
+                    //if read_pos as usize > read.qual().len() - 1 {
+                    //continue;
+                    //}
+                    if read.qual()[read_pos as usize] <= quality_threshold {
+                        continue;
+                    }
+                    any = true;
+                    let base: u8 = seq.encoded_base((read_pos) as usize);
+                    //base is a 4 bit integer, 0..15 mapping to
+                    //= 0
+                    //A 1
+                    //C 2
+                    //M 3
+                    //G 4
+                    //R 5
+                    //S 6
+                    //V 7
+                    //T 8
+                    //W 9
+                    //Y 10
+                    //H 12
+                    //K 12
+                    //D 13
+                    //B 14
+                    //N 15
+                    //no need to reverse, everything is on the same strand...
+                    let out_base = match base {
+                        1 => BASE_A,
+                        2 => BASE_C,
+                        4 => BASE_G,
+                        8 => BASE_T,
+                        _ => continue,
+                    };
+                    self.0[[(genome_pos - start) as usize, out_base]] =
+                        self.0[[(genome_pos - start) as usize, out_base]].saturating_add(1);
                 }
-                any = true;
-                let base: u8 = seq.encoded_base((*read_pos) as usize);
-                //base is a 4 bit integer, 0..15 mapping to
-                //= 0
-                //A 1
-                //C 2
-                //M 3
-                //G 4
-                //R 5
-                //S 6
-                //V 7
-                //T 8
-                //W 9
-                //Y 10
-                //H 12
-                //K 12
-                //D 13
-                //B 14
-                //N 15
-                //no need to reverse, everything is on the same strand...
-                let out_base = match base {
-                    1 => BASE_A,
-                    2 => BASE_C,
-                    4 => BASE_G,
-                    8 => BASE_T,
-                    _ => continue,
-                };
-                self.0[[(genome_pos - start) as usize, out_base]] =
-                    self.0[[(genome_pos - start) as usize, out_base]].saturating_add(1);
             }
         }
         any
