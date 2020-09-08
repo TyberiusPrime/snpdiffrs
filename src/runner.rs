@@ -177,6 +177,7 @@ impl std::fmt::Debug for ToDo {
 enum JobResult {
     LoadedCoverage(usize, usize, Coverage, Chunk), //chunk, input_id,
     CalculatedSnps(usize, [usize; 2], Vec<ResultRow>, Chunk),
+    OutputDone,
     QuitDone,
 }
 
@@ -197,6 +198,7 @@ impl std::fmt::Debug for JobResult {
                     result_rows.len()
                 ))
             }
+            JobResult::OutputDone => f.write_fmt(format_args!("JobResult::OutputDone")),
             JobResult::QuitDone => f.write_fmt(format_args!("JobResult::QuitDone")),
         }
     }
@@ -221,7 +223,7 @@ impl NtoNRunner {
     }
 
     fn run(self) {
-        //let log = get_logger();
+        let log = get_logger();
 
         //input
         let mut blocks: Vec<Block> = Vec::new(); //the currently loaded blocks.
@@ -243,6 +245,7 @@ impl NtoNRunner {
         let min_score = self.config.min_score.unwrap_or(50.0);
 
         //output
+        let samples: Vec<&String> = self.config.samples.keys().collect();
         let output_dir = Path::new(&self.config.output_dir);
         let pairs: Vec<[usize; 2]> = (0..input_filenames.len())
             .combinations(2)
@@ -250,7 +253,7 @@ impl NtoNRunner {
             .collect();
         let output_filenames: Vec<_> = pairs
             .iter()
-            .map(|x| output_dir.join(format!("{}_vs_{}.tsv.tmp", x[0], x[1])))
+            .map(|x| output_dir.join(format!("{}_vs_{}.tsv.tmp", samples[x[0]], samples[x[1]])))
             .collect();
         let outputs: Vec<_> = output_filenames
             .iter()
@@ -300,16 +303,17 @@ impl NtoNRunner {
         let mut quit_counter = 0;
         thread::scope(|s| {
         let block_iterator = block_iterator.clone();
-        for _nn in 0..ncores {
+        for nn in 0..ncores {
             let thread_recv = todo_receiver.clone();
             let result_sender = result_sender.clone();
-            //let log = log.clone();
+            let log = log.clone();
             s.spawn(move |_s2| {
                 //so this is what happens in the worker threads.
                 for el in thread_recv {
                     match el {
                         ToDo::LoadCoverage(input_filenames, input_no, chunk, chunk_no) => {
                             //info!(log, "exc: Load_coverage: c:{} i:{}", chunk_no, input_no);
+                            info!(log, "Loading {} {}", chunk.chr, chunk.start);
                             result_sender
                                 .send(JobResult::LoadedCoverage(
                                     chunk_no,
@@ -328,18 +332,21 @@ impl NtoNRunner {
                         ToDo::CalcSnps(chunk_id, pair, cov, other_cov, chunk) => {
                             let result: Vec<ResultRow> = other_cov.score_differences(cov.as_ref(), min_score, chunk.start);
                             //info!(log, "exc: calc snps c: {}, pair: {:?}, result_len: {}", chunk_id, pair, result.len());
+                            info!(log, "Calced {}, {}" ,chunk.chr, chunk.start);
                             result_sender.send(
                                 JobResult::CalculatedSnps(chunk_id, pair, result, chunk)).expect("Could not send CalculatedSnps");
                         }
                         ToDo::OutputResult(result_rows, chunk, output) => {
                             //info!(log, "exc: output results for chr: {}, start: {}, count: {}, first entry: {}", chunk.chr, chunk.start, result_rows.len(), if result_rows.is_empty() {0} else {result_rows[0].relative_pos});
+                            info!(log, "writing {}, {}", chunk.chr, chunk.start);
                             write_results(
                                 &mut output.lock().unwrap(),
                                 &chunk.chr,
                                 0, result_rows);
+                            result_sender.send(JobResult::OutputDone).expect("could not signal OutputDone");
                         }
                         ToDo::Quit => {
-                            //info!(log, "exc: quit: {}", nn);
+                            info!(log, "exc: quit: {}", nn);
                             result_sender.send(JobResult::QuitDone).expect("Could not send QuitDone");
                             return;
                         }
@@ -354,45 +361,45 @@ impl NtoNRunner {
                 JobResult::LoadedCoverage(chunk_id, input_id, cov, chunk) => {
                     //Todo: optimize by not putting empty blocks into the pool
                     //info!(log, "Loadeded Coverage {} {}", chunk_id, input_id);
+                    info!(log, "loaded {} {}", chunk.chr, chunk.start);
                     load_progress.add(1usize);
                     if load_progress.has_progressed_significantly() {
                         print!("\r{}", load_progress);
                     }
 
-
-                        let cov = Arc::new(cov);
-                        let mut used = 0;
-                        if !blocks.is_empty() {
-                            for block in
-                                blocks.iter_mut()
-                            {
-                                //info!(log, "checking block other_chunk_id {}: other_input_id, {}", block.chunk_id, block.input_id);
-                                if block.chunk_id == chunk_id{
-                                    let (a,b, cov_a, cov_b) =
-                                        if block.input_id < input_id {
-                                            (block.input_id, input_id, cov.clone(), block.coverage.clone())
-                                        }
-                                        else  {
-                                            (input_id, block.input_id, block.coverage.clone(), cov.clone())
-                                        };
-                                    //info!( log, "Sending pair {} {} for chunk {}", a, b, chunk_id);
-                                    todo_sender
-                                        .send(ToDo::CalcSnps(
-                                                chunk_id,
-                                                [a, b],
-                                                cov_a,
-                                                cov_b,
-                                                chunk.clone(),
-                                                ))
-                                        .expect("Could not send CalcSnps");
-                                    block.used += 1;
-                                    used += 1;
-                                }
+                    let cov = Arc::new(cov);
+                    let mut used = 0;
+                    if !blocks.is_empty() {
+                        for block in
+                            blocks.iter_mut()
+                        {
+                            //info!(log, "checking block other_chunk_id {}: other_input_id, {}", block.chunk_id, block.input_id);
+                            if block.chunk_id == chunk_id{
+                                let (a,b, cov_a, cov_b) =
+                                    if block.input_id < input_id {
+                                        (block.input_id, input_id, cov.clone(), block.coverage.clone())
+                                    }
+                                    else  {
+                                        (input_id, block.input_id, block.coverage.clone(), cov.clone())
+                                    };
+                                info!( log, "Sending pair {} {} for chunk {} {}", a, b, chunk.chr, chunk.start);
+                                todo_sender
+                                    .send(ToDo::CalcSnps(
+                                            chunk_id,
+                                            [a, b],
+                                            cov_a,
+                                            cov_b,
+                                            chunk.clone(),
+                                            ))
+                                    .expect("Could not send CalcSnps");
+                                block.used += 1;
+                                used += 1;
                             }
                         }
-                        blocks.push(Block{chunk_id, input_id, coverage: cov, used});
-                        },
-                    JobResult::CalculatedSnps(chunk_id, pair, result_rows, chunk) =>{
+                    }
+                    blocks.push(Block{chunk_id, input_id, coverage: cov, used});
+                    },
+                JobResult::CalculatedSnps(chunk_id, pair, result_rows, chunk) =>{
                         //info!(log, "Received CalculatedSnps for c:{}, pair: {:?}", chunk_id, pair);
                         load_progress.add(1usize);
                         if load_progress.has_progressed_significantly() {
@@ -421,14 +428,7 @@ impl NtoNRunner {
                             //info!(log, "deleting block at {}", ii);
                             blocks.remove(*ii);
                         }
-                        if block_iterator.lock().unwrap().len() == 0 { //must do this first, not after sending out some more work...
-                            //info!(log, "block_iterator empty - preparing to leave");
-                            for _nn in 0..ncores {
-                                todo_sender.send(ToDo::Quit).unwrap();
-                            }
-                        }
-
-                        if blocks.len() < max_concurrent_blocks {
+                    if blocks.len() < max_concurrent_blocks {
                             for _ in blocks.len()..max_concurrent_blocks {
                                 let next = block_iterator.lock().expect("Could not lock block_iterator").pop(); 
                                 match next {
@@ -447,6 +447,16 @@ impl NtoNRunner {
                             }
                         }
                     },
+                    JobResult::OutputDone => {
+                        if block_iterator.lock().unwrap().is_empty() && blocks.is_empty() { //no more work incoming, and everything done.
+                            //info!(log, "block_iterator empty - preparing to leave");
+                            for _nn in 0..ncores {
+                                todo_sender.send(ToDo::Quit).unwrap();
+                            }
+                        }
+
+
+                    }
                     JobResult::QuitDone => {
                         quit_counter += 1;
                         if quit_counter == ncores {
