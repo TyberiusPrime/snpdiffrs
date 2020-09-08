@@ -165,10 +165,10 @@ impl Coverage {
         let mut any = false;
         while let Ok(true) = bam.read(&mut read) {
             if (read.flags()
-                & (htslib::BAM_FUNMAP
-                    | htslib::BAM_FSECONDARY
-                    | htslib::BAM_FQCFAIL
-                    | htslib::BAM_FDUP) as u16)
+                & (htslib::BAM_FUNMAP // 0x4
+                    | htslib::BAM_FSECONDARY // 256 = 0x100
+                    | htslib::BAM_FQCFAIL // 521 = 0x200
+                    | htslib::BAM_FDUP) as u16) // 0x400
                 > 0
             {
                 continue;
@@ -189,7 +189,7 @@ impl Coverage {
                     // of our intervals.
                     continue;
                 }
-                if read.qual()[*read_pos as usize] < quality_threshold {
+                if read.qual()[*read_pos as usize] <= quality_threshold {
                     continue;
                 }
                 any = true;
@@ -219,7 +219,7 @@ impl Coverage {
                     8 => BASE_T,
                     _ => continue,
                 };
-                self.0[[(genome_pos - start) as usize, out_base]] += 1;
+                self.0[[(genome_pos - start) as usize, out_base]] = self.0[[(genome_pos - start) as usize, out_base]].saturating_add(1);
             }
         }
         any
@@ -579,4 +579,19 @@ mod test {
         assert_eq!(res[0].score, res[1].score);
         assert!(res[0].score.abs_diff_eq(&408.2737f32, 1e-4))
     }
+
+    #[test]
+    fn test_ll_issue()
+     {
+         use super::Coverage;
+         let a = 28.0;
+         let c = 20.0;
+         let g = 640.0;
+         let t = 2.0;
+         let should = vec![ -531142.44, -531206.5, -1603.4318, -530213.8, -504125.16, -47201.902, -503268.75, -47257.156, -503324.0, -46400.72, -92005.58];
+         let actual = Coverage::ll(a, c,g, t);
+         dbg!(&actual);
+         assert!(actual.abs_diff_eq(&should, 1e-4));
+
+     }
 }

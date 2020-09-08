@@ -436,13 +436,21 @@ impl NtoNRunner {
 
         let mut outputs: HashMap<[usize; 2], _> = pairs.iter().map(|x| *x).zip(outputs).collect();
 
-        let ncores = 2;//self.config.ncores.unwrap_or(num_cpus::get() as u32);
+        let ncores = self.config.ncores.unwrap_or(num_cpus::get() as u32);
         let max_concurrent_blocks = input_filenames.len() + ncores as usize; //we need this many, right?
         info!(log, "ncores: {}", ncores);
 
         let (todo_sender, todo_receiver) = crossbeam::crossbeam_channel::unbounded();
         for ii in 0..max_concurrent_blocks {
-            let (_, ((chunk_no, chunk), block_no)) = block_iterator.pop().expect("Nothing to do?");
+            if block_iterator.is_empty() {
+                if ii == 0 {
+                    panic!("Nothing to do?");
+                }
+                else  {
+                    break;
+                }
+            }
+            let (_, ((chunk_no, chunk), block_no)) = block_iterator.pop().unwrap();
             todo_sender
                 .send(ToDo::LoadCoverage(
                     input_filenames[block_no].clone(),

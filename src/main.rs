@@ -25,6 +25,15 @@ output_dir = 'tests/ERR329501'
             A = ['sample_data/sample_a.bam']
             B = ['sample_data/sample_b.bam']
         "
+    }  else if args.contains(&"--mt".to_owned()) {
+        "
+        output_dir = 'tests/test_sample_data'
+        chromosomes = ['MT']
+        min_score = 0.0
+        [samples]
+            A = ['sample_data/ERR329501.bam']
+            B = ['sample_data/GSM1553106.bam']
+        "
     } else {
         // takes about 50 seconds as of 10:25 // down to 3 seconds at 15:30
         "

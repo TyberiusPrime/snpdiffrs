@@ -14,7 +14,18 @@ impl ChunkedGenome {
     pub fn new(bam: bam::IndexedReader, chromosomes: &Option<Vec<String>>) -> ChunkedGenome {
         ChunkedGenome {
             chromosomes: match chromosomes {
-                Some(x) => x.iter().map(|y| y.to_string()).collect(),
+                Some(x) => {
+                    let chromosomes: Vec<String> = x.iter().map(|y| y.to_string()).collect();
+                    let targets = bam.header().target_names();
+                    for c in chromosomes.iter() {
+                        if !targets.contains(&c.as_bytes()) {
+                            panic!("invalid chromosome specified: {}", c);
+                        }
+                    }
+                    chromosomes
+
+
+                },
                 None => bam
                     .header()
                     .target_names()
