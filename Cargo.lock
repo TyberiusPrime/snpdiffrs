@@ -789,6 +789,7 @@ dependencies = [
  "lazy_static",
  "ndarray",
  "ndarray-stats",
+ "num_cpus",
  "rust-htslib",
  "serde",
  "serde_derive",

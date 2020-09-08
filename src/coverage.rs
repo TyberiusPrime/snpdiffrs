@@ -35,6 +35,12 @@ fn vector_arg_max(input: &[f32; 11]) -> (f32, usize) {
 /// probably anyhow.
 pub struct Coverage(Array2<u16>);
 
+impl std::fmt::Debug for Coverage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Coverage")
+    }
+}
+
 #[derive(Debug)]
 pub struct ResultRow {
     pub relative_pos: u32,
@@ -129,7 +135,7 @@ impl Coverage {
                 filter_homo_polymer_threshold,
             );
         }
-        if any {
+        if any { // whether we have any reads at all.
             result
         } else {
             Coverage::new(0)
@@ -314,7 +320,7 @@ impl Coverage {
         (vector_arg_max(&lls), lls[other])
     }
 
-    pub fn score_differences(&self, other: &Self, min_score: f32) -> Vec<ResultRow> {
+    pub fn score_differences(&self, other: &Self, min_score: f32, offset: u32) -> Vec<ResultRow> {
         let length = self.len();
         if length == 0 || other.len() == 0 {
             return Vec::new();
@@ -343,7 +349,7 @@ impl Coverage {
                 continue;
             }
             let (self_max, self_argmax) =
-                Coverage::single_log_likelihood_max_arg_max(sa, sg, sc, st);
+                Coverage::single_log_likelihood_max_arg_max(sa, sc, sg, st);
             let ((other_max, other_argmax), other_self_argmax) =
                 Coverage::single_log_likelihood_max_arg_max_plus_other(oa, oc, og, ot, self_argmax);
             if self_argmax == other_argmax {
@@ -359,7 +365,7 @@ impl Coverage {
             let score = ll_differing - ll_same;
             if score >= min_score {
                 result.push(ResultRow {
-                    relative_pos: ii as u32,
+                    relative_pos: ii as u32 + offset,
                     count_self_a: sa,
                     count_self_c: sc,
                     count_self_g: sg,
@@ -548,7 +554,7 @@ mod test {
             vec![0, 0, 0, 0],
             vec![0, 0, 100, 0],
         );
-        let res = cov_a.score_differences(&cov_b, 0.0);
+        let res = cov_a.score_differences(&cov_b, 0.0, 0);
         assert!(res.len() == 3);
         assert_eq!(res[0].relative_pos, 0);
         assert_eq!(res[1].relative_pos, 2);
@@ -569,7 +575,7 @@ mod test {
         use super::Coverage;
         let cov_a = Coverage::from_counts(vec![0, 51], vec![0, 0], vec![51, 0], vec![0, 0]);
         let cov_b = Coverage::from_counts(vec![0, 0], vec![0, 0], vec![0, 0], vec![51, 51]);
-        let res = cov_a.score_differences(&cov_b, 0.);
+        let res = cov_a.score_differences(&cov_b, 0., 0);
         assert_eq!(res[0].score, res[1].score);
         assert!(res[0].score.abs_diff_eq(&408.2737f32, 1e-4))
     }

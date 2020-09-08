@@ -85,68 +85,12 @@ pub fn run_snp_diff(config: RunConfig) -> Result<(), ()> {
 
     let pairs: Vec<_> = config.samples.keys().sorted().combinations(2).collect();
     {
-        let quality_threshold = config.quality_threshold;
-        let filter_homo_polymer_threshold = config.filter_homo_polymer_threshold.clone();
-        let min_score = config.min_score.unwrap_or(50.0);
-
-        /*
-        let chunks = chunked_genome::ChunkedGenome::new(first_bam, &config.chromosomes);
-        for chunk in chunks.iter(50_000_000) {
-            let cov = get_coverages(
-                &config,
-                &chunk,
-                quality_threshold,
-                &filter_homo_polymer_threshold,
-            );
-            calculate_differences(&cov, &pairs, &mut output_handles, &chunk, min_score);
-        }
-        */
-        let chunks = chunked_genome::ChunkedGenome::new(first_bam, &config.chromosomes);
+       let chunks = chunked_genome::ChunkedGenome::new(first_bam, &config.chromosomes);
         let mut runner = NtoNRunner::new(config, chunks.iter(50_000_000).collect());
         runner.run();
     }
     //files are now closed. rename them all
     Ok(())
-}
-
-fn get_coverages(
-    config: &RunConfig,
-    chunk: &Chunk,
-    quality_threshold: u8,
-    filter_homo_polymer_threshold: &Option<u8>,
-) -> HashMap<String, Coverage> {
-    config
-        .samples
-        .iter()
-        .map(|(name, bam_files)| {
-            (
-                name.clone(),
-                Coverage::from_bams(
-                    &bam_files.iter().map(|x| Path::new(x)).collect(),
-                    chunk.tid,
-                    chunk.start,
-                    chunk.stop,
-                    quality_threshold,
-                    filter_homo_polymer_threshold,
-                ),
-            )
-        })
-        .collect()
-}
-
-fn calculate_differences(
-    coverages: &HashMap<String, Coverage>,
-    pairs: &Vec<Vec<&String>>,
-    output_handles: &mut Vec<std::io::BufWriter<std::fs::File>>,
-    chunk: &Chunk,
-    min_score: f32,
-) {
-    for (ii, pair) in pairs.iter().enumerate() {
-        let delta = coverages[pair[0]].score_differences(&coverages[pair[1]], min_score);
-        if !delta.is_empty() {
-            write_results(&mut output_handles[ii], &chunk.chr, chunk.start, delta);
-        }
-    }
 }
 
 fn write_results(
@@ -390,7 +334,7 @@ fn get_logger() -> slog::Logger {
 enum ToDo {
     LoadCoverage(Arc<Vec<PathBuf>>, usize, Chunk, usize),
     CalcSnps(usize, [usize; 2], Arc<Coverage>, Arc<Coverage>, Chunk),
-    OutputResult(Vec<ResultRow>, Arc<Mutex<BufWriter<File>>>),
+    OutputResult(Vec<ResultRow>, Chunk, Arc<Mutex<BufWriter<File>>>),
     Quit,
 }
 
@@ -401,7 +345,7 @@ impl std::fmt::Debug for ToDo {
                 f.write_fmt(format_args!("ToDo::LoadCoverage"))
             }
             ToDo::CalcSnps(_, _, _, _, _) => f.write_fmt(format_args!("ToDo:Calc_Snps")),
-            ToDo::OutputResult(_, _) => f.write_fmt(format_args!("ToDo:OutputResult")),
+            ToDo::OutputResult(_,_, _) => f.write_fmt(format_args!("ToDo:OutputResult")),
             ToDo::Quit => f.write_fmt(format_args!("ToDo:Quit")),
         }
     }
@@ -409,7 +353,7 @@ impl std::fmt::Debug for ToDo {
 
 enum JobResult {
     LoadedCoverage(usize, usize, Coverage, Chunk), //chunk, input_id,
-    CalculatedSnps(usize, [usize; 2], Vec<ResultRow>),
+    CalculatedSnps(usize, [usize; 2], Vec<ResultRow>, Chunk),
     QuitDone,
 }
 
@@ -422,7 +366,7 @@ impl std::fmt::Debug for JobResult {
                     chunk_id, input_id
                 ))
             }
-            JobResult::CalculatedSnps(chunk_id, pair, result_rows) => f.write_fmt(format_args!(
+            JobResult::CalculatedSnps(chunk_id, pair, result_rows, _chunk) => f.write_fmt(format_args!(
                 "JobResult::CalculatedSnp(c: {}, pair: {:?}, len(results)=={}",
                 chunk_id,
                 pair,
@@ -438,6 +382,14 @@ struct NtoNRunner {
     chunks: Vec<Chunk>,
 }
 
+#[derive(Debug)]
+struct Block {
+    chunk_id: usize,
+    input_id: usize, 
+    coverage: Arc<Coverage>,
+    used: usize,
+}
+
 impl NtoNRunner {
     fn new(config: RunConfig, chunks: Vec<Chunk>) -> NtoNRunner {
         NtoNRunner { config, chunks }
@@ -446,7 +398,7 @@ impl NtoNRunner {
     fn run(self) {
         let log = get_logger();
 
-        let mut blocks: Vec<(usize, usize, Arc<Coverage>, usize)> = Vec::new(); //chunk_id, input_id, coverage, usage_count
+        let mut blocks: Vec<Block> = Vec::new(); //chunk_id, input_id, coverage, usage_count
         let input_files: Vec<Vec<PathBuf>> = self
             .config
             .input_filenames()
@@ -460,6 +412,9 @@ impl NtoNRunner {
                 .enumerate()
                 .collect();
         let mut block_iterator: Vec<_> = block_iterator.into_iter().rev().collect();
+        let quality_threshold = self.config.quality_threshold;
+        let filter_homo_polymer_threshold = self.config.filter_homo_polymer_threshold.clone();
+        let min_score = self.config.min_score.unwrap_or(50.0);
 
         let samples: Vec<&String> = self.config.samples.keys().collect();
 
@@ -481,8 +436,8 @@ impl NtoNRunner {
 
         let mut outputs: HashMap<[usize; 2], _> = pairs.iter().map(|x| *x).zip(outputs).collect();
 
-        let max_concurrent_blocks = input_filenames.len(); //we need this many, right?
-        let ncores = self.config.ncores.unwrap_or(2);
+        let ncores = 2;//self.config.ncores.unwrap_or(num_cpus::get() as u32);
+        let max_concurrent_blocks = input_filenames.len() + ncores as usize; //we need this many, right?
         info!(log, "ncores: {}", ncores);
 
         let (todo_sender, todo_receiver) = crossbeam::crossbeam_channel::unbounded();
@@ -511,28 +466,36 @@ impl NtoNRunner {
                     //so this is what happens in the worker threads.
                     for el in thread_recv {
                         match el {
-                            ToDo::LoadCoverage(_input_filenames, input_no, chunk, chunk_no) => {
+                            ToDo::LoadCoverage(input_filenames, input_no, chunk, chunk_no) => {
                                 info!(log, "exc: Load_coverage: c:{} i:{}", chunk_no, input_no);
                                 result_sender
                                     .send(JobResult::LoadedCoverage(
                                         chunk_no,
                                         input_no,
-                                        Coverage::new(0),
+                                        Coverage::from_bams(&input_filenames.as_ref().iter().map(|x| x.as_path()).collect(),
+                                                            chunk.tid,
+                                                            chunk.start,
+                                                            chunk.stop,
+                                                            quality_threshold,
+                                                            &filter_homo_polymer_threshold,
+                                                            ) ,
                                         chunk,
                                     ))
                                     .expect("Could not send LoadedCoverage reply");
                             }
                             ToDo::CalcSnps(chunk_id, pair, cov, other_cov, chunk) => {
-                                let result: Vec<ResultRow> = Vec::new();
-                                info!(log, "exc: calc snps c: {}, pair: {:?}", chunk_id, pair);
+                                let result: Vec<ResultRow> = other_cov.score_differences(cov.as_ref(), min_score, chunk.start);
+                                info!(log, "exc: calc snps c: {}, pair: {:?}, result_len: {}", chunk_id, pair, result.len());
                                 result_sender.send(
-                                    JobResult::CalculatedSnps(chunk_id, pair, result)).expect("Could not send CalculatedSnps");
+                                    JobResult::CalculatedSnps(chunk_id, pair, result, chunk)).expect("Could not send CalculatedSnps");
                             }
-                            ToDo::OutputResult(result_rows, output) => {
-                                info!(log, "exc: output results");
+                            ToDo::OutputResult(result_rows, chunk, output) => {
+                                info!(log, "exc: output results for chr: {}, start: {}, count: {}, first entry: {}", 
+                                      chunk.chr, chunk.start, result_rows.len(),
+                                      if result_rows.is_empty() {0} else {result_rows[0].relative_pos});
                                 write_results(
                                     &mut output.lock().unwrap(),
-                                    "chrZ", 
+                                    &chunk.chr, 
                                     0, result_rows);
                             }
                             ToDo::Quit => {
@@ -553,53 +516,61 @@ impl NtoNRunner {
                         let cov = Arc::new(cov);
                         let mut used = 0;
                         if blocks.len() > 0 {
-                            for (other_chunk_id, other_input_id, other_cov, other_used) in
+                            for block in
                                 blocks.iter_mut()
                             {
-                                info!(log, "checking block other_chunk_id {}: other_input_id, {}", other_chunk_id, other_input_id);
-                                if *other_chunk_id == chunk_id{
-                                    let (a,b) = if *other_input_id < input_id { (*other_input_id, input_id) } else { (input_id, *other_input_id) };
+                                info!(log, "checking block other_chunk_id {}: other_input_id, {}", block.chunk_id, block.input_id);
+                                if block.chunk_id == chunk_id{
+                                    let (a,b, cov_a, cov_b) =
+                                        if block.input_id < input_id {
+                                            (block.input_id, input_id, cov.clone(), block.coverage.clone())
+                                        }
+                                        else  {
+                                            (input_id, block.input_id, block.coverage.clone(), cov.clone())
+                                        };
                                     info!(
                                         log,
                                         "Sending pair {} {} for chunk {}",
                                         a,
                                         b,
                                         chunk_id
-                                    );
+                                        );
                                     todo_sender
                                         .send(ToDo::CalcSnps(
-                                            chunk_id,
-                                            [a, b],
-                                            cov.clone(),
-                                            other_cov.clone(),
-                                            chunk.clone(),
-                                        ))
+                                                chunk_id,
+                                                [a, b],
+                                                cov_a,
+                                                cov_b,
+                                                chunk.clone(),
+                                                ))
                                         .expect("Could not send CalcSnps");
-                                    *other_used += 1;
+                                    block.used += 1;
                                     used += 1;
                                 }
                             }
                         }
-                        blocks.push((chunk_id, input_id, cov, used));
-                    },
-                    JobResult::CalculatedSnps(chunk_id, pair, result_rows) =>{
-                        todo_sender.send(ToDo::OutputResult(result_rows,
+                        blocks.push(Block{chunk_id, input_id, coverage: cov, used});
+                        },
+                    JobResult::CalculatedSnps(chunk_id, pair, result_rows, chunk) =>{
+                        info!(log, "Received CalculatedSnps for c:{}, pair: {:?}", chunk_id, pair);
+                        todo_sender.send(ToDo::OutputResult(result_rows, chunk,
                                                             outputs.get(&pair).expect("Could not find output for pair").clone())
                                 ).expect("Could not send OutputResult");
                         let mut to_delete = Vec::new();
+                        let mut found = 0;
                         for (ii, block) in blocks.iter_mut().enumerate() {
-                            if block.0 == chunk_id && (block.1 == pair[0]) || (block.1 == pair[1]) {
-                                block.3 -= 1;
-                                let mut found = false;
-                                if block.3 == 0{
-                                    found = true;
-                                    info!(log, "deleting block c: {}, i: {}; ii: {}", block.0, block.1, ii);
+                            if (block.chunk_id == chunk_id) && ((block.input_id == pair[0]) || (block.input_id == pair[1])) {
+                                info!(log, "Accepted block: {:?}", block);
+                                block.used -= 1;
+                                found += 1;
+                                if block.used == 0{
+                                    info!(log, "deleting block c: {}, i: {}; ii: {}", block.chunk_id, block.input_id, ii);
                                     to_delete.push(ii);
                                 }
-                                if !found {
-                                    panic!("you made a mistake and we got back a block that no longer exists");
-                                }
                             }
+                        }
+                        if found != 2 {
+                            panic!("you made a mistake and we got back a block that no longer exists: c: {}, pair: {:?}, found: {}", chunk_id, pair, found);
                         }
                         for ii in to_delete.iter().rev() {
                             info!(log, "deleting block at {}", ii);
