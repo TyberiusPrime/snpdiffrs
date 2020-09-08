@@ -23,9 +23,7 @@ impl ChunkedGenome {
                         }
                     }
                     chromosomes
-
-
-                },
+                }
                 None => bam
                     .header()
                     .target_names()

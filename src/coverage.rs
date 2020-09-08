@@ -135,7 +135,8 @@ impl Coverage {
                 filter_homo_polymer_threshold,
             );
         }
-        if any { // whether we have any reads at all.
+        if any {
+            // whether we have any reads at all.
             result
         } else {
             Coverage::new(0)
@@ -154,12 +155,6 @@ impl Coverage {
         let mut bam = bam::IndexedReader::from_path(filename).expect("Could not read input bam");
         let start = start as i64;
         let stop = stop as i64;
-        /*
-        let tid: u32 = bam
-            .header()
-            .tid(chr.as_bytes())
-            .expect("Could not find chromosome");
-        */
         bam.fetch(tid, start as u64, stop as u64).unwrap();
         let mut read: bam::Record = bam::Record::new();
         let mut any = false;
@@ -219,14 +214,15 @@ impl Coverage {
                     8 => BASE_T,
                     _ => continue,
                 };
-                self.0[[(genome_pos - start) as usize, out_base]] = self.0[[(genome_pos - start) as usize, out_base]].saturating_add(1);
+                self.0[[(genome_pos - start) as usize, out_base]] =
+                    self.0[[(genome_pos - start) as usize, out_base]].saturating_add(1);
             }
         }
         any
     }
 
     pub fn len(self: &Self) -> usize {
-        return self.0.dim().0;
+        self.0.dim().0
     }
 
     pub fn single_log_likelihood(
@@ -579,19 +575,4 @@ mod test {
         assert_eq!(res[0].score, res[1].score);
         assert!(res[0].score.abs_diff_eq(&408.2737f32, 1e-4))
     }
-
-    #[test]
-    fn test_ll_issue()
-     {
-         use super::Coverage;
-         let a = 28.0;
-         let c = 20.0;
-         let g = 640.0;
-         let t = 2.0;
-         let should = vec![ -531142.44, -531206.5, -1603.4318, -530213.8, -504125.16, -47201.902, -503268.75, -47257.156, -503324.0, -46400.72, -92005.58];
-         let actual = Coverage::ll(a, c,g, t);
-         dbg!(&actual);
-         assert!(actual.abs_diff_eq(&should, 1e-4));
-
-     }
 }

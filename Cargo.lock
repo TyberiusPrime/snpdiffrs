@@ -397,6 +397,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfae20f6b19ad527b550c223fddc3077a547fc70cda94b9b566575423fd303ee"
 
 [[package]]
+name = "log"
+version = "0.4.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fabed175da42fed1fa0746b0ea71f412aa9d35e76e95e59b192c64b9dc2bf8b"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "lzma-sys"
 version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -577,6 +586,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04f5f085b5d71e2188cb8271e5da0161ad52c3f227a661a3c135fdf28e258b12"
 dependencies = [
  "unicode-xid",
+]
+
+[[package]]
+name = "progressing"
+version = "3.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97b7db19a74ba7c34de36558abed080568491d2b8999a34de914b1793b0b4b1b"
+dependencies = [
+ "log",
 ]
 
 [[package]]
@@ -790,6 +808,7 @@ dependencies = [
  "ndarray",
  "ndarray-stats",
  "num_cpus",
+ "progressing",
  "rust-htslib",
  "serde",
  "serde_derive",

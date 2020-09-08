@@ -25,7 +25,7 @@ output_dir = 'tests/ERR329501'
             A = ['sample_data/sample_a.bam']
             B = ['sample_data/sample_b.bam']
         "
-    }  else if args.contains(&"--mt".to_owned()) {
+    } else if args.contains(&"--mt".to_owned()) {
         "
         output_dir = 'tests/test_sample_data'
         chromosomes = ['MT']
