@@ -1,7 +1,6 @@
 use crate::consts::*;
 use ndarray::prelude::*;
 use rust_htslib::bam;
-use rust_htslib::bam::ext::BamRecordExtensions;
 use rust_htslib::bam::Read;
 use rust_htslib::htslib;
 use std::convert::TryInto;
