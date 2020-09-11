@@ -232,9 +232,8 @@ impl NtoNRunner {
             .iter()
             .map(|x| x.iter().map(PathBuf::from).collect())
             .collect();
-        let mut input_filenames: Vec<Arc<Vec<PathBuf>>> =
+        let input_filenames: Vec<Arc<Vec<PathBuf>>> =
             input_files.into_iter().map(Arc::new).collect();
-        input_filenames.sort();
         let block_iterator: Vec<_> =
             iproduct!(self.chunks.iter().enumerate(), 0..input_filenames.len())
                 .enumerate()
@@ -514,4 +513,42 @@ output_dir = 'tests/test_sample_data'
         let actual = std::fs::read_to_string("tests/test_sample_data/A_vs_B.tsv").unwrap();
         assert_eq!(should, actual)
     }
+    #[test]
+    fn test_sample_n_to_n() {
+        let test_path = "tests/test_sample_data_n_to_n";
+        let toml = format!("
+output_dir = '{}'
+[samples]
+    A = ['sample_data/sample_a.bam'] # mixed up order is intentional
+    C = ['sample_data/sample_a.bam']
+    D = ['sample_data/sample_b.bam']
+    B = ['sample_data/sample_b.bam']
+", test_path);
+        use std::path::Path;
+        let output_dir = Path::new(test_path);
+        if output_dir.exists() {
+            std::fs::remove_dir_all(output_dir).ok();
+        }
+        std::fs::create_dir_all(output_dir).unwrap();
+        super::snp_diff_from_toml(&toml).unwrap();
+        let should =
+            std::fs::read_to_string("sample_data/marsnpdiff_sample_a_vs_sample_b.tsv").unwrap();
+        let should = should.replace(".0", "");
+
+        let actual = std::fs::read_to_string(test_path.to_owned() + "/A_vs_B.tsv").unwrap();
+        assert_eq!(should, actual);
+        let actual = std::fs::read_to_string(test_path.to_owned() + "/A_vs_D.tsv").unwrap();
+        assert_eq!(should, actual);
+
+        let actual = std::fs::read_to_string(test_path.to_owned() + "/A_vs_C.tsv").unwrap();
+        assert_eq!(actual.matches("\n").count(), 1);
+
+        let actual = std::fs::read_to_string(test_path.to_owned() + "/B_vs_D.tsv").unwrap();
+        assert_eq!(actual.matches("\n").count(), 1);
+        std::fs::remove_dir_all(output_dir).ok();
+
+
+    }
+
+
 }
