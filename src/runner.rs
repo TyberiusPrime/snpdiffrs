@@ -166,9 +166,8 @@ struct PayloadTodoLoadCoverage {
     chunk_id: usize,
 }
 
-
 #[derive(Debug)]
-struct PayloadTodoCalcSnps{
+struct PayloadTodoCalcSnps {
     chunk_id: usize,
     sample_pair: [usize; 2],
     coverage_a: Arc<Coverage>,
@@ -177,7 +176,7 @@ struct PayloadTodoCalcSnps{
 }
 
 #[derive(Debug)]
-struct PayloadTodoOutputResult{
+struct PayloadTodoOutputResult {
     result_rows: Vec<ResultRow>,
     chunk: Chunk,
     output: Arc<Mutex<BufWriter<File>>>,
@@ -204,7 +203,7 @@ struct PayloadDoneCalcSnps {
     chunk_id: usize,
     sample_pair: [usize; 2],
     result_rows: Vec<ResultRow>,
-    chunk: Chunk
+    chunk: Chunk,
 }
 
 #[derive(Debug)]
@@ -216,7 +215,19 @@ enum MsgDone {
 }
 
 struct NtoNRunner {
-    config: RunConfig,
+    //config: RunConfig,
+    //chunks: Vec<Chunk>,
+    input_filenames: Vec<Arc<Vec<PathBuf>>>,
+    output_filenames: Vec<PathBuf>,
+    outputs: Option<HashMap<[usize; 2], Arc<Mutex<std::io::BufWriter<std::fs::File>>>>>,
+
+    quality_threshold: u8,
+    filter_homo_polymer_threshold: Option<u8>,
+    min_score: f32,
+
+    ncores: u32,
+    max_concurrent_blocks: usize,
+
     chunks: Vec<Chunk>,
 }
 
@@ -225,34 +236,23 @@ struct Block {
     chunk_id: usize,
     sample_id: usize,
     coverage: Arc<Coverage>,
-    used: usize,
+    remaining_uses: usize,
 }
 
 impl NtoNRunner {
     fn new(config: RunConfig, chunks: Vec<Chunk>) -> NtoNRunner {
-        NtoNRunner { config, chunks }
-    }
-
-    fn run(self) {
-        let log = get_logger();
-
         //input
-        let samples_and_input_filenames = self.config.samples_and_input_filenames();
+        let samples_and_input_filenames = config.samples_and_input_filenames();
         let (samples, input_filenames): (Vec<String>, Vec<Vec<PathBuf>>) =
             samples_and_input_filenames.into_iter().unzip();
+        if samples.len() < 2 {
+            panic!("Not enough samples supplied");
+        }
         let input_filenames: Vec<Arc<Vec<PathBuf>>> =
             input_filenames.into_iter().map(Arc::new).collect();
-        let block_iterator: Vec<_> =
-            iproduct!(self.chunks.iter().enumerate(), 0..input_filenames.len())
-                .enumerate()
-                .collect();
-        let mut block_iterator: Vec<_> = block_iterator.into_iter().rev().collect();
-        let quality_threshold = self.config.quality_threshold;
-        let filter_homo_polymer_threshold = self.config.filter_homo_polymer_threshold;
-        let min_score = self.config.min_score.unwrap_or(50.0);
 
         //output
-        let output_dir = Path::new(&self.config.output_dir);
+        let output_dir = Path::new(&config.output_dir);
         let pairs: Vec<[usize; 2]> = (0..input_filenames.len())
             .combinations(2)
             .map(|x| [x[0], x[1]])
@@ -267,33 +267,29 @@ impl NtoNRunner {
             .map(std::io::BufWriter::new)
             .map(|buf| Arc::new(Mutex::new(buf)))
             .collect();
-
         let outputs: HashMap<[usize; 2], _> = pairs.iter().copied().zip(outputs).collect();
 
-        //tunables
-        let ncores = self.config.ncores.unwrap_or(num_cpus::get() as u32);
+        let ncores = config.ncores.unwrap_or(num_cpus::get() as u32);
         let max_concurrent_blocks = input_filenames.len() + ncores as usize; //we need at least one per input_filename to create all pairs. And some bonus is helpful to avoid delays.
-                                                                             //debug!(log, "ncores: {}", ncores);
 
-        let mut load_progress = MappingBar::with_range(
-            0,
-            block_iterator.len() + (input_filenames.len().pow(2) / 2 * self.chunks.len()),
-        )
-        .timed();
-        load_progress.set_len(40);
-        load_progress.set(0usize);
-        print!("{}", load_progress);
+        NtoNRunner {
+            input_filenames,
+            output_filenames,
+            outputs: Some(outputs),
+            quality_threshold: config.quality_threshold,
+            filter_homo_polymer_threshold: config.filter_homo_polymer_threshold,
+            min_score: config.min_score.unwrap_or(50.0),
+            ncores,
+            max_concurrent_blocks,
+            chunks,
+        }
+    }
 
-        let (todo_sender, todo_receiver) = crossbeam::crossbeam_channel::unbounded();
-        for ii in 0..max_concurrent_blocks {
-            if block_iterator.is_empty() {
-                if ii == 0 {
-                    panic!("Nothing to do?");
-                } else {
-                    break;
-                }
-            }
-            let (_, ((chunk_id, chunk), sample_id)) = block_iterator.pop().unwrap();
+    fn _push_next_block(
+        block_iterator: &mut Vec<(usize, ((usize, Chunk), usize))>,
+        todo_sender: &crossbeam::Sender<MsgTodo>,
+    ) {
+        if let Some((_, ((chunk_id, chunk), sample_id))) = block_iterator.pop() {
             todo_sender
                 .send(MsgTodo::LoadCoverage(PayloadTodoLoadCoverage {
                     sample_id: sample_id,
@@ -302,11 +298,45 @@ impl NtoNRunner {
                 }))
                 .expect("Could not send initial loads");
         }
+    }
+
+    fn run(self) {
+        let log = get_logger();
+
+        let chunk_count = self.chunks.len();
+        let block_iterator: Vec<_> = iproduct!(
+            self.chunks.clone().into_iter().enumerate(),
+            0..self.input_filenames.len()
+        )
+        .enumerate()
+        .collect();
+        let mut block_iterator: Vec<_> = block_iterator.into_iter().rev().collect();
+        //tunables
+        //debug!(log, "ncores: {}", ncores);
+
+        let expected_number_of_uses_per_block = { self.input_filenames.len() - 1 }; //in each pair we count both blocks, but we don't compare a block to itself.
+        let mut load_progress = MappingBar::with_range(
+            0,
+            block_iterator.len()
+                + block_iterator.len() * expected_number_of_uses_per_block * chunk_count,
+        )
+        .timed();
+        load_progress.set_len(40);
+        load_progress.set(0usize);
+        print!("{}", load_progress);
+        if block_iterator.is_empty() {
+            panic!("Nothing to do?");
+        }
+
+        let (todo_sender, todo_receiver) = crossbeam::crossbeam_channel::unbounded();
+        let mut _self = Arc::new(self);
+        for _ in 0.._self.max_concurrent_blocks {
+            Self::_push_next_block(&mut block_iterator, &todo_sender);
+        }
 
         //runtime stuff
         let (result_sender, result_receiver) = crossbeam::crossbeam_channel::unbounded();
         let block_iterator = Arc::new(Mutex::new(block_iterator));
-        let expected_number_of_uses_per_block = { input_filenames.len() - 1 }; //in each pair we count both blocks, but we don't compare a block to itself.
         debug!(
             log,
             "Expected number of uses for each block: {}", expected_number_of_uses_per_block
@@ -316,11 +346,12 @@ impl NtoNRunner {
         let mut quit_counter = 0;
         thread::scope(|s| {
         let block_iterator = block_iterator.clone();
-        for nn in 0..ncores {
+        let _self = _self.clone();
+        for nn in 0.._self.ncores {
             let thread_recv = todo_receiver.clone();
             let result_sender = result_sender.clone();
             let log = log.clone();
-            let input_filenames = input_filenames.clone(); // todo: replace with arc,  I suppose.
+            let _self = _self.clone();
             s.spawn(move |_s2| {
                 //so this is what happens in the worker threads.
                 for el in thread_recv {
@@ -334,29 +365,31 @@ impl NtoNRunner {
                                             chunk_id: payload.chunk_id,
                                             sample_id: payload.sample_id,
                                             coverage:
-                                            Coverage::from_bams(&input_filenames[payload.sample_id].as_ref().iter().map(|x| x.as_path()).collect(),
+                                            Coverage::from_bams(&_self.input_filenames[payload.sample_id].as_ref().iter().map(|x| x.as_path()).collect(),
                                                         payload.chunk.tid,
                                                         payload.chunk.start,
                                                         payload.chunk.stop,
-                                                        quality_threshold,
-                                                        &filter_homo_polymer_threshold,
+                                                        _self.quality_threshold,
+                                                        &_self.filter_homo_polymer_threshold,
                                                         ),
                                             chunk: payload.chunk,
                                         }
                                 ))
                                 .expect("Could not send LoadCoverage reply");
-                        }
+                        },
+
                         MsgTodo::CalcSnps(payload) => {
-                            let result: Vec<ResultRow> = payload.coverage_b.score_differences(payload.coverage_a.as_ref(), min_score, payload.chunk.start);
+                            let result: Vec<ResultRow> = payload.coverage_b.score_differences(payload.coverage_a.as_ref(), _self.min_score, payload.chunk.start);
                             //debug!(log, "exc: calc snps c: {}, pair: {:?}, result_len: {}", chunk_id, pair, result.len());
                             debug!(log, "Calced {}, {}" ,payload.chunk.chr, payload.chunk.start);
                             result_sender.send(
                                 MsgDone::CalcSnps(PayloadDoneCalcSnps{
-                                    chunk_id: payload.chunk_id, 
-                                    sample_pair: payload.sample_pair, 
-                                    result_rows: result, 
+                                    chunk_id: payload.chunk_id,
+                                    sample_pair: payload.sample_pair,
+                                    result_rows: result,
                                     chunk: payload.chunk})).expect("Could not send CalcSnps");
                         }
+
                         MsgTodo::OutputResult(payload) => {
                             //debug!(log, "exc: output results for chr: {}, start: {}, count: {}, first entry: {}", chunk.chr, chunk.start, result_rows.len(), if result_rows.is_empty() {0} else {result_rows[0].relative_pos});
                             debug!(log, "writing {}, {}", payload.chunk.chr, payload.chunk.start);
@@ -366,6 +399,7 @@ impl NtoNRunner {
                                 0, payload.result_rows);
                             result_sender.send(MsgDone::OutputDone).expect("could not signal OutputDone");
                         }
+
                         MsgTodo::Quit => {
                             debug!(log, "exc: quit: {}", nn);
                             result_sender.send(MsgDone::QuitDone).expect("Could not send QuitDone");
@@ -376,6 +410,8 @@ impl NtoNRunner {
             });
         }
         s.spawn(move |_s2| {
+            //and this is the managing thread
+            //needs to be a seprate spawn so that the panics! work as intended
             for res in result_receiver.iter() {
                 debug!(log, "Received a result: {:?}", res);
                 match res {
@@ -389,12 +425,11 @@ impl NtoNRunner {
                         }
 
                         let cov = Arc::new(payload.coverage);
-                        let used = expected_number_of_uses_per_block;
+                        let remaining_uses = expected_number_of_uses_per_block;
                         if !blocks.is_empty() {
                             for block in
                                 blocks.iter_mut()
                             {
-                                //debug!(log, "checking block other_chunk_id {}: other_sample_id, {}", block.chunk_id, block.sample_id);
                                 if block.chunk_id == payload.chunk_id{
                                     let (a,b, cov_a, cov_b) =
                                         if block.sample_id < payload.sample_id {
@@ -415,14 +450,13 @@ impl NtoNRunner {
                                                 }
                                                 ))
                                         .expect("Could not send CalcSnps");
-                                    //block.used += 1;
-                                    //used += 1;
                                 }
                             }
                         }
-                        blocks.push(Block{chunk_id: payload.chunk_id, sample_id: payload.sample_id, coverage: cov, used});
-                        },
-                    MsgDone::CalcSnps(payload) =>{
+                        blocks.push(Block{chunk_id: payload.chunk_id, sample_id: payload.sample_id, coverage: cov, remaining_uses});
+                    },
+
+                    MsgDone::CalcSnps(payload) => {
                             debug!(log, "Received CalcSnps for c:{}, pair: {:?}", payload.chunk_id, payload.sample_pair);
                             load_progress.add(1usize);
                             if load_progress.has_progressed_significantly() {
@@ -432,16 +466,16 @@ impl NtoNRunner {
                                     PayloadTodoOutputResult{
                                         result_rows: payload.result_rows,
                                         chunk: payload.chunk,
-                                        output: outputs.get(&payload.sample_pair).expect("Could not find output for pair").clone()
+                                        output: _self.outputs.as_ref().unwrap().get(&payload.sample_pair).expect("Could not find output for pair").clone()
                                     })).expect("Could not send OutputResult");
                             let mut to_delete = Vec::new();
                             let mut found = 0;
                             for (ii, block) in blocks.iter_mut().enumerate() {
                                 if (block.chunk_id == payload.chunk_id) && ((block.sample_id == payload.sample_pair[0]) || (block.sample_id == payload.sample_pair[1])) {
                                     debug!(log, "Accepted block: {:?}", block);
-                                    block.used -= 1;
+                                    block.remaining_uses -= 1;
                                     found += 1;
-                                    if block.used == 0{
+                                    if block.remaining_uses == 0{
                                         debug!(log, "deleting block c: {}, i: {}; ii: {}", block.chunk_id, block.sample_id, ii);
                                         to_delete.push(ii);
                                     }
@@ -454,52 +488,37 @@ impl NtoNRunner {
                                 debug!(log, "deleting block at {}", ii);
                                 blocks.remove(*ii);
                             }
-                        if blocks.len() < max_concurrent_blocks {
-                                for _ in blocks.len()..max_concurrent_blocks {
-                                    let next = block_iterator.lock().expect("Could not lock block_iterator").pop(); 
-                                    match next {
-                                        Some((_, ((chunk_no, chunk), sample_id))) => {
-                                            todo_sender
-                                                .send(MsgTodo::LoadCoverage(
-                                                        PayloadTodoLoadCoverage{
-                                                            sample_id: sample_id,
-                                                            chunk: chunk.clone(),
-                                                            chunk_id: chunk_no,
-                                                        }
-                                                ))
-                                                .unwrap();
-                                    },
-                                    None => {},
-                                    };
+                        if blocks.len() < _self.max_concurrent_blocks {
+                                for _ in blocks.len().._self.max_concurrent_blocks {
+                                Self::_push_next_block(&mut block_iterator.lock().unwrap(), &todo_sender);
                                 }
                             }
                         },
-                        MsgDone::OutputDone => {
-                            if block_iterator.lock().unwrap().is_empty() && blocks.is_empty() { //no more work incoming, and everything done.
-                                //debug!(log, "block_iterator empty - preparing to leave");
-                                for _nn in 0..ncores {
-                                    todo_sender.send(MsgTodo::Quit).unwrap();
-                                }
+                    MsgDone::OutputDone => {
+                    if block_iterator.lock().unwrap().is_empty() && blocks.is_empty() { //no more work incoming, and everything done.
+                        //debug!(log, "block_iterator empty - preparing to leave");
+                            for _nn in 0.._self.ncores {
+                                todo_sender.send(MsgTodo::Quit).unwrap();
                             }
-
-
-                        }
-                        MsgDone::QuitDone => {
-                            quit_counter += 1;
-                            if quit_counter == ncores {
-                                break;
-                            }
-
                         }
                     }
+                    MsgDone::QuitDone => {
+                        quit_counter += 1;
+                        if quit_counter == _self.ncores {
+                            break;
+                        }
+
+                    }
                 }
+            }
                 //everything processed
-                drop(outputs);
         });
         })
         .expect("An error occured in one of the scoped threads");
 
-        output_filenames
+        drop(Arc::get_mut(&mut _self).unwrap().outputs.take());
+        _self
+            .output_filenames
             .iter()
             .map(|tmp_filename| {
                 std::fs::rename(
@@ -535,6 +554,25 @@ output_dir = 'tests/test_sample_data'
         let actual = std::fs::read_to_string("tests/test_sample_data/A_vs_B.tsv").unwrap();
         assert_eq!(should, actual)
     }
+    #[test]
+    #[should_panic]
+    fn test_same_data() {
+        let toml = "
+output_dir = 'tests/test_same_data'
+[samples]
+    A = ['sample_data/sample_a.bam']
+    A = ['sample_data/sample_a.bam']
+";
+        use std::path::Path;
+        let output_dir = Path::new("tests/test_same_data");
+        if output_dir.exists() {
+            std::fs::remove_dir_all(output_dir).ok();
+        }
+        std::fs::create_dir_all(output_dir).unwrap();
+        super::snp_diff_from_toml(toml).unwrap();
+    }
+
+
     #[test]
     fn test_sample_n_to_n() {
         let test_path = "tests/test_sample_data_n_to_n";
