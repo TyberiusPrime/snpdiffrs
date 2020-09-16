@@ -6,7 +6,7 @@ mod runner;
 #[macro_use]
 extern crate lazy_static;
 use libc::{prctl, PR_SET_PDEATHSIG};
-use nix::sys::signal::{SIGTERM};
+use nix::sys::signal::SIGTERM;
 
 fn main() {
     //die if the parent process is killed.
@@ -24,14 +24,16 @@ output_dir = 'tests/ERR329501'
 [samples]
     A = ['sample_data/ERR329501.bam']
     B = ['sample_data/GSM1553106.bam']
-".to_string()
+"
+        .to_string()
     } else if args.contains(&"--tiny".to_owned()) {
         "
         output_dir = 'tests/test_sample_data'
         [samples]
             A = ['sample_data/sample_a.bam']
             B = ['sample_data/sample_b.bam']
-        ".to_string()
+        "
+        .to_string()
     } else if args.contains(&"--mt".to_owned()) {
         "
         output_dir = 'tests/test_sample_data'
@@ -40,19 +42,21 @@ output_dir = 'tests/ERR329501'
         [samples]
             A = ['sample_data/ERR329501.bam']
             B = ['sample_data/GSM1553106.bam']
-        ".to_string()
+        "
+        .to_string()
     } else if args.contains(&"--normal".to_owned()) {
         // takes about 50 seconds as of 10:25 // down to 3 seconds at 15:30
-            "
+        "
             output_dir = 'tests/ERR329501_chr4'
             [samples]
                 A = ['sample_data/ERR329501_chr4.bam']
                 B = ['sample_data/GSM1553106_chr4.bam']
-            ".to_string()
+            "
+        .to_string()
     } else {
         let filename = &args[1];
         std::fs::read_to_string(filename).expect("Could not read file")
-        };
+    };
     use std::path::Path;
     let output_dir = Path::new("tests/");
     if output_dir.exists() {

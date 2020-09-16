@@ -7,7 +7,8 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rust-htslib="0.32.0"
+rust-htslib={path = "/home/finkernagel/upstream/rust_htslib/algigned_block_pairs"}
+# "0.32.0"
 ndarray = { version = "0.13.1", features = ["approx"] }
 lazy_static = "1.4.0"
 approx = "0.3.2"
@@ -17,7 +18,7 @@ toml = "0.5.6"
 itertools = "0.9.0"
 ndarray-stats = "0.3.0"
 threadpool = "1.8.1"
-slog = "2.5.2"
+slog = {version = "2.5.2", features = ["release_max_level_warn"]}
 slog-async = "2.5.0"
 slog-term = "2.6.0"
 crossbeam = "0.7.3"

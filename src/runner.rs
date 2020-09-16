@@ -270,7 +270,8 @@ impl NtoNRunner {
         let outputs: HashMap<[usize; 2], _> = pairs.iter().copied().zip(outputs).collect();
 
         let ncores = config.ncores.unwrap_or(num_cpus::get() as u32);
-        let max_concurrent_blocks = input_filenames.len() + ncores as usize; //we need at least one per input_filename to create all pairs. And some bonus is helpful to avoid delays.
+        let max_concurrent_blocks = (input_filenames.len() + ncores as usize).max(
+            ncores as usize * 3); //we need at least one per input_filename to create all pairs. And some bonus is helpful to avoid delays.
 
         NtoNRunner {
             input_filenames,

@@ -157,7 +157,7 @@ impl Coverage {
                     let qend = qstart + *len as i64;
                     let rstart = pos;
                     let rend = pos + *len as i64;
-                    result.push((qstart, qend, rstart, rend + 1));
+                    result.push((qstart, qend, rstart, rend));
                     qpos += *len as i64;
                     pos += *len as i64;
                 }
@@ -186,19 +186,15 @@ impl Coverage {
         let mut bam = bam::IndexedReader::from_path(filename).expect("Could not read input bam");
         let start = start as i64;
         let stop = stop as i64;
-        bam.fetch(tid, start as u64, stop as u64).unwrap();
-        let mut read: bam::Record = bam::Record::new();
+        bam.fetch((tid, start as u64, stop as u64)).unwrap();
         let mut any = false;
-        while let Ok(true) = bam.read(&mut read) {
-            if (read.flags()
+        for read in bam.rc_records().filter_map(|x|x.ok()).filter(|read| {
+            (read.flags()
                 & (htslib::BAM_FUNMAP // 0x4
                     | htslib::BAM_FSECONDARY // 256 = 0x100
                     | htslib::BAM_FQCFAIL // 521 = 0x200
                     | htslib::BAM_FDUP) as u16) // 0x400
-                > 0
-            {
-                continue;
-            }
+                == 0}) {
             let seq = read.seq();
             if filter_homo_polymer_threshold.is_some()
                 && is_homo_polymer(&seq, filter_homo_polymer_threshold.unwrap())
@@ -206,8 +202,8 @@ impl Coverage {
                 continue;
             }
             //for [read_pos, genome_pos] in read.aligned_pairs().iter() {
-            for (qstart, qend, genome_start, genome_end) in Coverage::aligned_blocks(&read).iter() {
-                if (*genome_end < start) || *genome_start >= stop {
+            for (qstart, qend, genome_start, genome_end) in Coverage::aligned_blocks(&read) {
+                if (genome_end < start) || genome_start >= stop {
                     // if this block is outside of the region
                     // don't count it at all.
                     // if it is on a block boundary
@@ -216,7 +212,7 @@ impl Coverage {
                     // of our intervals.
                     continue;
                 }
-                for (read_pos, genome_pos) in (*qstart..*qend).zip(*genome_start..*genome_end) {
+                for (read_pos, genome_pos) in (qstart..qend).zip(genome_start..genome_end) {
                     if (genome_pos - start) as usize > self.len() - 1 {
                         continue;
                     }
