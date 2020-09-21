@@ -114,7 +114,7 @@ impl Coverage {
     }
 
     pub fn from_bams(
-        bams: &Vec<&Path>,
+        bams: &[&Path],
         tid: u32,
         start: u32,
         stop: u32,
@@ -188,13 +188,14 @@ impl Coverage {
         let stop = stop as i64;
         bam.fetch((tid, start as u64, stop as u64)).unwrap();
         let mut any = false;
-        for read in bam.rc_records().filter_map(|x|x.ok()).filter(|read| {
+        for read in bam.rc_records().filter_map(|x| x.ok()).filter(|read| {
             (read.flags()
                 & (htslib::BAM_FUNMAP // 0x4
                     | htslib::BAM_FSECONDARY // 256 = 0x100
                     | htslib::BAM_FQCFAIL // 521 = 0x200
                     | htslib::BAM_FDUP) as u16) // 0x400
-                == 0}) {
+                == 0
+        }) {
             let seq = read.seq();
             if filter_homo_polymer_threshold.is_some()
                 && is_homo_polymer(&seq, filter_homo_polymer_threshold.unwrap())
@@ -414,6 +415,99 @@ impl Coverage {
         }
         result
     }
+}
+
+pub(crate) struct BaseCounts {
+    pub a: u64,
+    pub g: u64,
+    pub c: u64,
+    pub t: u64,
+}
+
+impl BaseCounts {
+    pub(crate) fn new_histogram() -> Vec<BaseCounts> {
+        let mut res = Vec::new();
+        for __ii in 0..u8::MAX {
+            res.push(BaseCounts {
+                a: 0,
+                c: 0,
+                g: 0,
+                t: 0,
+            });
+        }
+        res
+    }
+
+    pub(crate) fn update(this: &mut Vec<BaseCounts>, other: &Vec<BaseCounts>) {
+        for ii in 0..this.len() {
+            this[ii].a += other[ii].a;
+            this[ii].c += other[ii].c;
+            this[ii].g += other[ii].g;
+            this[ii].t += other[ii].t;
+        }
+    }
+}
+
+pub(crate) fn count_homopolymers_in_bam(
+    filename: &Path,
+    tid: u32,
+    start: u32,
+    stop: u32,
+) -> Vec<BaseCounts> {
+    let mut res = BaseCounts::new_histogram();
+    let mut bam = bam::IndexedReader::from_path(filename).expect("Could not read input bam");
+    let start = start as i64;
+    let stop = stop as i64;
+    bam.fetch((tid, start as u64, stop as u64)).unwrap();
+    for read in bam.rc_records().filter_map(|x| x.ok()).filter(|read| {
+        (read.flags()
+                & (htslib::BAM_FUNMAP // 0x4
+                    | htslib::BAM_FSECONDARY // 256 = 0x100
+                    | htslib::BAM_FQCFAIL // 521 = 0x200
+                    | htslib::BAM_FDUP) as u16) // 0x400
+                == 0
+    }) {
+        if read.pos() < start || read.pos() >= stop {
+            continue;
+        }
+        let (count, base) = quantify_homo_polymer(&read.seq());
+        let count = count as usize;
+        match base {
+            BASE_A => res[count].a += 1,
+            BASE_C => res[count].c += 1,
+            BASE_G => res[count].g += 1,
+            BASE_T => res[count].t += 1,
+            _ => panic!("None AGTC homopolymer?"), //ignore non regular base - must be one weird read?
+        }
+    }
+    res
+}
+
+fn quantify_homo_polymer(seq: &bam::record::Seq) -> (u8, usize) {
+    let mut max_value: u8 = 1;
+    let mut max_base = BASE_A;
+    let mut current_value: u8 = 0;
+    let mut last: u8 = 15; //N
+    for ii in 0..seq.len() {
+        let letter = seq.encoded_base(ii);
+        if last == letter {
+            current_value = current_value.saturating_add(1);
+            if current_value >= max_value {
+                max_value = current_value;
+                max_base = match letter {
+                    1 => BASE_A,
+                    2 => BASE_C,
+                    4 => BASE_G,
+                    8 => BASE_T,
+                    _ => continue,
+                };
+            }
+        } else {
+            current_value = 1;
+        }
+        last = letter;
+    }
+    (max_value, max_base)
 }
 
 fn is_homo_polymer(seq: &bam::record::Seq, threshold: u8) -> bool {

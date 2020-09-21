@@ -56,6 +56,7 @@ pub struct ChunkedGenomeIterator<'a> {
     last_chr_length: u64,
     chunk_size: u32,
 }
+
 #[derive(Debug, Clone)]
 pub struct Chunk {
     pub chr: String,

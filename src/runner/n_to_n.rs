@@ -1,6 +1,4 @@
-use crate::chunked_genome;
-use crate::chunked_genome::Chunk;
-use crate::consts::*;
+use crate::chunked_genome::{Chunk, ChunkedGenome};
 use crate::coverage::{Coverage, ResultRow};
 
 use std::collections::HashMap;
@@ -13,58 +11,20 @@ use std::sync::Mutex;
 
 use itertools::{iproduct, Itertools};
 use progressing::{mapping::Bar as MappingBar, Baring};
-use rust_htslib::bam;
-use serde::Deserialize;
 
+use crossbeam::thread;
 #[allow(unused_imports)]
 use slog::debug;
 
-use crossbeam::thread;
+use super::{get_logger, haplotype_const_to_str, RunConfig};
 
-fn default_quality_threshold() -> u8 {
-    15u8
-}
-
-fn default_blocksize() -> usize {
-    50_000_000
-}
-
-#[derive(Deserialize, Debug)]
-pub struct RunConfig {
-    output_dir: String,
-    chromosomes: Option<Vec<String>>,
-    samples: HashMap<String, Vec<String>>,
-    #[serde(default = "default_blocksize")]
-    block_size: usize,
-    ncores: Option<u32>,
-    #[serde(default = "default_quality_threshold")]
-    quality_threshold: u8,
-    filter_homo_polymer_threshold: Option<u8>,
-    min_score: Option<f32>,
-}
-
-impl RunConfig {
-    fn samples_and_input_filenames(&self) -> Vec<(String, Vec<PathBuf>)> {
-        let mut temp: Vec<(&String, &Vec<String>)> = self.samples.iter().collect();
-        temp.sort();
-        temp.iter()
-            .map(|(name, bam_files)| {
-                (
-                    name.to_string(),
-                    bam_files.iter().map(|x| x.into()).collect::<Vec<PathBuf>>(),
-                )
-            })
-            .collect()
-    }
-}
-
-pub fn snp_diff_from_toml(input: &str) -> Result<(), ()> {
-    let config: RunConfig = toml::from_str(input).unwrap();
-    run_snp_diff(config)
-}
-
-pub fn run_snp_diff(config: RunConfig) -> Result<(), ()> {
-    for filenames in config.samples.values() {
+pub fn run_n_to_n(config: RunConfig) -> Result<(), ()> {
+    for filenames in config
+        .samples
+        .as_ref()
+        .expect("No samples provided")
+        .values()
+    {
         for filename in filenames {
             if !Path::new(filename).exists() {
                 panic!("File did not exist {}", filename);
@@ -76,21 +36,10 @@ pub fn run_snp_diff(config: RunConfig) -> Result<(), ()> {
         std::fs::create_dir_all(output_dir).unwrap();
     }
 
-    let first_bam = config
-        .samples
-        .values()
-        .next()
-        .expect("No samples")
-        .iter()
-        .next()
-        .unwrap();
-    let first_bam = bam::IndexedReader::from_path(first_bam).unwrap();
-
-    let chunks = chunked_genome::ChunkedGenome::new(first_bam, &config.chromosomes);
+    let chunks = ChunkedGenome::new(config.first_bam(), &config.chromosomes);
     let block_size = config.block_size;
     let runner = NtoNRunner::new(config, chunks.iter(block_size).collect());
     runner.run();
-    //files are now closed. rename them all
     Ok(())
 }
 
@@ -129,34 +78,6 @@ fn write_results(
         )
         .unwrap();
     }
-}
-
-fn haplotype_const_to_str(haplotype: u8) -> &'static str {
-    match haplotype as usize {
-        AA => "AA",
-        AC => "AC",
-        AG => "AG",
-        AT => "AT",
-        CC => "CC",
-        CG => "CG",
-        CT => "CT",
-        GG => "GG",
-        GT => "GT",
-        TT => "TT",
-        NN => "NN",
-        _ => "??",
-    }
-}
-
-#[allow(dead_code)]
-fn get_logger() -> slog::Logger {
-    use slog::{o, Drain};
-
-    let decorator = slog_term::TermDecorator::new().build();
-    let drain = slog_term::CompactFormat::new(decorator).build().fuse();
-    let drain = slog_async::Async::new(drain).build().fuse();
-
-    slog::Logger::root(drain, o!())
 }
 
 #[derive(Debug)]
@@ -270,8 +191,8 @@ impl NtoNRunner {
         let outputs: HashMap<[usize; 2], _> = pairs.iter().copied().zip(outputs).collect();
 
         let ncores = config.ncores.unwrap_or(num_cpus::get() as u32);
-        let max_concurrent_blocks = (input_filenames.len() + ncores as usize).max(
-            ncores as usize * 3); //we need at least one per input_filename to create all pairs. And some bonus is helpful to avoid delays.
+        let max_concurrent_blocks =
+            (input_filenames.len() + ncores as usize).max(ncores as usize * 3); //we need at least one per input_filename to create all pairs. And some bonus is helpful to avoid delays.
 
         NtoNRunner {
             input_filenames,
@@ -293,9 +214,9 @@ impl NtoNRunner {
         if let Some((_, ((chunk_id, chunk), sample_id))) = block_iterator.pop() {
             todo_sender
                 .send(MsgTodo::LoadCoverage(PayloadTodoLoadCoverage {
-                    sample_id: sample_id,
+                    sample_id,
                     chunk: chunk.clone(),
-                    chunk_id: chunk_id,
+                    chunk_id,
                 }))
                 .expect("Could not send initial loads");
         }
@@ -366,7 +287,7 @@ impl NtoNRunner {
                                             chunk_id: payload.chunk_id,
                                             sample_id: payload.sample_id,
                                             coverage:
-                                            Coverage::from_bams(&_self.input_filenames[payload.sample_id].as_ref().iter().map(|x| x.as_path()).collect(),
+                                            Coverage::from_bams(&_self.input_filenames[payload.sample_id].as_ref().iter().map(|x| x.as_path()).collect::<Vec<_>>(),
                                                         payload.chunk.tid,
                                                         payload.chunk.start,
                                                         payload.chunk.stop,
@@ -533,6 +454,8 @@ impl NtoNRunner {
 }
 
 mod test {
+    #[cfg(test)]
+    use super::super::snp_diff_from_toml;
 
     #[test]
     fn test_sample_data() {
@@ -548,7 +471,7 @@ output_dir = 'tests/test_sample_data'
             std::fs::remove_dir_all(output_dir).ok();
         }
         std::fs::create_dir_all(output_dir).unwrap();
-        super::snp_diff_from_toml(toml).unwrap();
+        snp_diff_from_toml(toml).unwrap();
         let should =
             std::fs::read_to_string("sample_data/marsnpdiff_sample_a_vs_sample_b.tsv").unwrap();
         let should = should.replace(".0", "");
@@ -570,9 +493,8 @@ output_dir = 'tests/test_same_data'
             std::fs::remove_dir_all(output_dir).ok();
         }
         std::fs::create_dir_all(output_dir).unwrap();
-        super::snp_diff_from_toml(toml).unwrap();
+        snp_diff_from_toml(toml).unwrap();
     }
-
 
     #[test]
     fn test_sample_n_to_n() {
@@ -594,7 +516,7 @@ output_dir = '{}'
             std::fs::remove_dir_all(output_dir).ok();
         }
         std::fs::create_dir_all(output_dir).unwrap();
-        super::snp_diff_from_toml(&toml).unwrap();
+        snp_diff_from_toml(&toml).unwrap();
         let should =
             std::fs::read_to_string("sample_data/marsnpdiff_sample_a_vs_sample_b.tsv").unwrap();
         let should = should.replace(".0", "");

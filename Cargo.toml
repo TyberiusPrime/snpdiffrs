@@ -7,7 +7,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rust-htslib={path = "/home/finkernagel/upstream/rust_htslib/algigned_block_pairs"}
+rust-htslib={git = "https://github.com/rust-bio/rust-htslib/"}
 # "0.32.0"
 ndarray = { version = "0.13.1", features = ["approx"] }
 lazy_static = "1.4.0"
@@ -26,6 +26,7 @@ num_cpus = "1.13.0"
 progressing = "3.0.2"
 nix = "0.18.0"
 libc = "0.2.77"
+rayon = "1.4.0"
 
 #[profile.release]
 #debug = true
