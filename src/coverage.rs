@@ -104,7 +104,7 @@ impl Coverage {
         filter_homo_polymer_threshold: &Option<u8>,
     ) -> Coverage {
         Coverage::from_bams(
-            &vec![filename],
+            &[filename],
             tid,
             start,
             stop,
@@ -438,7 +438,7 @@ impl BaseCounts {
         res
     }
 
-    pub(crate) fn update(this: &mut Vec<BaseCounts>, other: &Vec<BaseCounts>) {
+    pub(crate) fn update(this: &mut Vec<BaseCounts>, other: &[BaseCounts]) {
         for ii in 0..this.len() {
             this[ii].a += other[ii].a;
             this[ii].c += other[ii].c;

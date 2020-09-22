@@ -75,6 +75,7 @@ impl QuantifyHomoPolymersRunner {
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn run(mut self) {
         let mut counters: Vec<Arc<Mutex<Vec<BaseCounts>>>> = Vec::new();
         for _ in 0..self.input_filenames.len() {

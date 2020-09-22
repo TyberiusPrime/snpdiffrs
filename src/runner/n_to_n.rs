@@ -135,6 +135,7 @@ enum MsgDone {
     QuitDone,
 }
 
+#[allow(clippy::type_complexity)]
 struct NtoNRunner {
     //config: RunConfig,
     //chunks: Vec<Chunk>,
@@ -207,6 +208,7 @@ impl NtoNRunner {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn _push_next_block(
         block_iterator: &mut Vec<(usize, ((usize, Chunk), usize))>,
         todo_sender: &crossbeam::Sender<MsgTodo>,
@@ -215,7 +217,7 @@ impl NtoNRunner {
             todo_sender
                 .send(MsgTodo::LoadCoverage(PayloadTodoLoadCoverage {
                     sample_id,
-                    chunk: chunk.clone(),
+                    chunk,
                     chunk_id,
                 }))
                 .expect("Could not send initial loads");
