@@ -111,5 +111,11 @@ output_dir = 'tests/quantification'
 Provide a tab-seperated-value of reads-with-a-(maximum)-homopolymer-length
 histogram per sample named like `A_homopolymer_histogram.tsv`.
 
+Some sequencing runs apperantly create lot's of 'fake' homopolymers, 
+which lead to massive false SNP calls. You can try to use the QuantifyHomopolymers
+mode to gain insight, I've had better luck simply comparing a run with
+a modest filter (e.g. filter homopolymers length >= 8) vs no homopolymer filtering,
+and looking at the ratio of called snps for sample pairs.
+
 
 
