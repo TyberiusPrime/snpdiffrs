@@ -4,7 +4,7 @@ use std::str;
 
 pub struct ChunkedGenome {
     bam: bam::IndexedReader,
-    chromosomes: Vec<String>,
+    pub(crate) chromosomes: Vec<String>,
 }
 
 impl ChunkedGenome {

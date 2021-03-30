@@ -16,25 +16,11 @@ use crossbeam::thread;
 #[allow(unused_imports)]
 use slog::debug;
 
-use super::{get_logger, haplotype_const_to_str, RunConfig};
+use super::{all_files_exists, ensure_output_dir, get_logger, haplotype_const_to_str, RunConfig};
 
 pub fn run_n_to_n(config: RunConfig) -> Result<(), ()> {
-    for filenames in config
-        .samples
-        .as_ref()
-        .expect("No samples provided")
-        .values()
-    {
-        for filename in filenames {
-            if !Path::new(filename).exists() {
-                panic!("File did not exist {}", filename);
-            }
-        }
-    }
-    let output_dir = Path::new(&config.output_dir);
-    if !output_dir.exists() {
-        std::fs::create_dir_all(output_dir).unwrap();
-    }
+    all_files_exists(&config.samples);
+    ensure_output_dir(&Path::new(&config.output_dir));
 
     let chunks = ChunkedGenome::new(config.first_bam(), &config.chromosomes);
     let block_size = config.block_size;

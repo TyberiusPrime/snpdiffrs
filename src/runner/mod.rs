@@ -1,9 +1,10 @@
 use rust_htslib::bam;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod n_to_n;
+mod pre_process;
 mod quantify_homopolymers;
 
 fn default_quality_threshold() -> u8 {
@@ -19,6 +20,7 @@ enum RunMode {
     NToN,
     OneToN,
     QuantifyHomopolymers,
+    PreProcess,
 }
 
 fn default_mode() -> RunMode {
@@ -83,6 +85,7 @@ pub fn snp_diff_from_toml(input: &str) -> Result<(), ()> {
         RunMode::NToN => n_to_n::run_n_to_n(config),
         RunMode::OneToN => panic!("implement me"),
         RunMode::QuantifyHomopolymers => quantify_homopolymers::run_quantify_homopolymers(config),
+        RunMode::PreProcess => pre_process::run_preprocess(config),
     }
 }
 
@@ -113,4 +116,20 @@ fn get_logger() -> slog::Logger {
     let drain = slog_async::Async::new(drain).build().fuse();
 
     slog::Logger::root(drain, o!())
+}
+
+fn all_files_exists(filenames: &Option<HashMap<String, Vec<String>>>) {
+    for sub_filenames in filenames.as_ref().expect("No samples provided").values() {
+        for filename in sub_filenames {
+            if !Path::new(filename).exists() {
+                panic!("File did not exist {}", filename);
+            }
+        }
+    }
+}
+
+fn ensure_output_dir(output_dir: &Path) {
+    if !output_dir.exists() {
+        std::fs::create_dir_all(output_dir).unwrap();
+    }
 }

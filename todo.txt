@@ -1,0 +1,5 @@
+* externally defined pairs mode
+* preprocess mode
+* read preprocessed files instead
+* check how well the logs are done (can you redo the output from the input+output log?)
+* one to n mode

@@ -3,6 +3,7 @@ use ndarray::prelude::*;
 use rust_htslib::bam;
 use rust_htslib::bam::Read;
 use rust_htslib::htslib;
+use serde::{ Serialize, Deserialize };
 use std::convert::TryInto;
 use std::path::Path;
 
@@ -32,6 +33,7 @@ fn vector_arg_max(input: &[f32; 11]) -> (f32, usize) {
 /// we only count to u16 (65k) to same on memory.
 /// At those sequencing depths we overrun our f32
 /// probably anyhow.
+#[derive(Serialize, Deserialize)]
 pub struct Coverage(Array2<u16>);
 
 impl std::fmt::Debug for Coverage {

@@ -1,3 +1,7 @@
+//todo: remove these, clean up
+#![allow(dead_code)]
+#![allow(unused_imports)]
+#![allow(unused_variables)]
 mod chunked_genome;
 mod consts;
 mod coverage;
@@ -15,7 +19,7 @@ fn main() {
     }
     use std::env;
     let args: Vec<String> = env::args().collect();
-    let toml = if args.contains(&"--large".to_owned()) {
+    let toml = if args.contains(&"--large".to_owned()) { //todo: replace with examples
         //214s as of 10:25 using one core- python needs 818 using
         //183 as of 15:58
         //down to 25s with multi core and latest optimizations as of 08-09-2020
@@ -54,6 +58,9 @@ output_dir = 'tests/ERR329501'
             "
         .to_string()
     } else {
+        if args.len() < 2 {
+            panic!("Please pass in a configuration file"); //todo: pretty help
+        }
         let filename = &args[1];
         std::fs::read_to_string(filename).expect("Could not read file")
     };
