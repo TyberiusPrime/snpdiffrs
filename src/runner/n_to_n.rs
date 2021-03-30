@@ -311,7 +311,8 @@ impl NtoNRunner {
                                                     println!("equal");
                                                     println!("shapes: {:?} {:?}", x.shape(), should.shape());
                                                 }
-                                                Some(x)
+                                                //Some(should) //works
+                                                Some(x) //OOM
                                             }
                                             None => (panic!("at the disco"))
                                         }
