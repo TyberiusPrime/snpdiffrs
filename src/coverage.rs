@@ -1,9 +1,10 @@
 use crate::consts::*;
+use lzzzz::{lz4, lz4_hc, lz4f};
 use ndarray::prelude::*;
 use rust_htslib::bam;
 use rust_htslib::bam::Read;
 use rust_htslib::htslib;
-use serde::{ Serialize, Deserialize };
+use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 use std::path::Path;
 
@@ -143,6 +144,56 @@ impl Coverage {
             Coverage::new(0)
         }
     }
+
+    pub fn from_preprocessed(preprocessed_file: &Path) -> Option<Self> {
+        use safe_transmute::transmute_one;
+        use std::fs::File;
+        use std::io::Read;
+
+        let mut fh = File::open(preprocessed_file).expect("Failed to open file");
+        let mut decompressed = Vec::new();
+        zstd::stream::copy_decode(fh, &mut decompressed).expect("Failed decompression");
+        let bytes_per_row = 2 * 4;
+        let row_count = decompressed.len() / (2 * 4);
+        let mut inner: Array2<u16> = Array2::zeros((row_count, 4));
+        for i in 0..row_count {
+            inner[(i, 0)] =
+                transmute_one::<u16>(&decompressed[i * bytes_per_row..i * bytes_per_row + 2])
+                    .expect("transmuet");
+            inner[(i, 1)] =
+                transmute_one::<u16>(&decompressed[i * bytes_per_row + 2..i * bytes_per_row + 4])
+                    .expect("transmuet");
+            inner[(i, 2)] =
+                transmute_one::<u16>(&decompressed[i * bytes_per_row + 4..i * bytes_per_row + 6])
+                    .expect("transmuet");
+            inner[(i, 3)] =
+                transmute_one::<u16>(&decompressed[i * bytes_per_row + 6..i * bytes_per_row + 8])
+                    .expect("transmuet");
+        }
+        return Some(Coverage(inner));
+
+        //        Some(Coverage::new(50_000_000))
+    }
+
+    pub fn head(&self) {
+        use ndarray::Slice;
+
+        let b = self.0.slice_axis(Axis(0), Slice::from(..100));
+        println!("{:?}", b);
+    }
+
+    pub fn first_delta(&self, other: &Self) {
+        use ndarray::Slice;
+        for row in 0..self.0.shape()[0] {
+            let a = self.0.slice_axis(Axis(0), Slice::from(row..row + 1));
+            let b = other.0.slice_axis(Axis(0), Slice::from(row..row + 1));
+            if a != b {
+                println!("Difference row {},\n {:?}\n{:?}", row, a, b);
+                break;
+            }
+        }
+    }
+
     //read start,stop, genome start, stop aligned blocks
     //replaces aligned_pairs with just the ends
     //and such safes on allocations.
@@ -416,6 +467,22 @@ impl Coverage {
             }
         }
         result
+    }
+
+    pub fn into_raw_vec(self) -> Vec<u16> {
+        self.0.into_raw_vec()
+    }
+
+    pub fn equal(&self, other: &Self) -> bool {
+        (self.0 == other.0) && (self.len() == other.len())
+    }
+
+    pub fn shape(&self) -> &[usize] {
+        self.0.shape()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.0.capacity()
     }
 }
 

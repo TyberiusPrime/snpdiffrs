@@ -43,6 +43,7 @@ pub struct RunConfig {
     quality_threshold: u8,
     filter_homo_polymer_threshold: Option<u8>,
     min_score: Option<f32>,
+    preprocessed_dir: Option<String>,
 }
 
 impl RunConfig {

@@ -19,7 +19,8 @@ fn main() {
     }
     use std::env;
     let args: Vec<String> = env::args().collect();
-    let toml = if args.contains(&"--large".to_owned()) { //todo: replace with examples
+    let toml = if args.contains(&"--large".to_owned()) {
+        //todo: replace with examples
         //214s as of 10:25 using one core- python needs 818 using
         //183 as of 15:58
         //down to 25s with multi core and latest optimizations as of 08-09-2020

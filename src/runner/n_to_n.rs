@@ -125,9 +125,11 @@ enum MsgDone {
 struct NtoNRunner {
     //config: RunConfig,
     //chunks: Vec<Chunk>,
+    samples: Vec<String>,
     input_filenames: Vec<Arc<Vec<PathBuf>>>,
     output_filenames: Vec<PathBuf>,
     outputs: Option<HashMap<[usize; 2], Arc<Mutex<std::io::BufWriter<std::fs::File>>>>>,
+    preprocessed_dir: Option<PathBuf>,
 
     quality_threshold: u8,
     filter_homo_polymer_threshold: Option<u8>,
@@ -137,6 +139,7 @@ struct NtoNRunner {
     max_concurrent_blocks: usize,
 
     chunks: Vec<Chunk>,
+    block_size: usize,
 }
 
 #[derive(Debug)]
@@ -182,6 +185,7 @@ impl NtoNRunner {
             (input_filenames.len() + ncores as usize).max(ncores as usize * 3); //we need at least one per input_filename to create all pairs. And some bonus is helpful to avoid delays.
 
         NtoNRunner {
+            samples,
             input_filenames,
             output_filenames,
             outputs: Some(outputs),
@@ -191,6 +195,8 @@ impl NtoNRunner {
             ncores,
             max_concurrent_blocks,
             chunks,
+            preprocessed_dir: config.preprocessed_dir.map(|x| PathBuf::from(&x)),
+            block_size: config.block_size,
         }
     }
 
@@ -269,19 +275,70 @@ impl NtoNRunner {
                         MsgTodo::LoadCoverage(payload) => {
                             //debug!(log, "exc: Load_coverage: c:{} i:{}", chunk_no, input_no);
                             debug!(log, "Loading {} {}", payload.chunk.chr, payload.chunk.start);
+                            let cov: Option<Coverage> = match _self.preprocessed_dir.as_ref() {
+                                Some(pd) => {
+                                    let full_pd = pd.join(format!(
+                                        "{}_bs={}_q={}_homo_polymer={}.snpdiff_block",_self.samples[payload.sample_id],
+                                        _self.block_size,
+                                        _self.quality_threshold,
+                                        match _self.filter_homo_polymer_threshold {
+                                                                Some(x) => format!("{}", x),
+                                                                None => "None".to_string(),
+                                    }));
+
+                                    let filename = full_pd.join(
+                                        format!("{}_{}.snpdiffrs_block",
+                                            payload.chunk.chr, payload.chunk.start));
+                                    if !filename.exists() {
+                                        println!("Could not load preprocessed data: {:?}", filename);
+                                        None
+                                    } else {
+                                        let r = Coverage::from_preprocessed(&filename);
+                                        match r {
+                                            Some(x) => {
+                                                let should = Coverage::from_bams(&_self.input_filenames[payload.sample_id].as_ref().iter().map(|x| x.as_path()).collect::<Vec<_>>(),
+                                        payload.chunk.tid,
+                                        payload.chunk.start,
+                                        payload.chunk.stop,
+                                        _self.quality_threshold,
+                                        &_self.filter_homo_polymer_threshold,
+                                );
+                                                if !x.equal(&should) {
+                                                    println!("not equal! {} {}", x.len(), should.len());
+                                                    //x.first_delta(&should);
+                                                   // panic!("");
+                                                } else {
+                                                    println!("equal");
+                                                    println!("shapes: {:?} {:?}", x.shape(), should.shape());
+                                                }
+                                                Some(x)
+                                            }
+                                            None => (panic!("at the disco"))
+                                        }
+                                    }
+                                },
+                                None => None
+                            };
+                            /*let cov: Coverage = match cov {
+                                Some(cov) => cov,
+                                None => Coverage::from_bams(&_self.input_filenames[payload.sample_id].as_ref().iter().map(|x| x.as_path()).collect::<Vec<_>>(),
+                                        payload.chunk.tid,
+                                        payload.chunk.start,
+                                        payload.chunk.stop,
+                                        _self.quality_threshold,
+                                        &_self.filter_homo_polymer_threshold,
+                                )
+                            };
+                            */
+                            let cov = cov.unwrap();
+
+
                             result_sender
                                 .send(MsgDone::LoadCoverage(
                                         PayloadDoneLoadCoverage{
                                             chunk_id: payload.chunk_id,
                                             sample_id: payload.sample_id,
-                                            coverage:
-                                            Coverage::from_bams(&_self.input_filenames[payload.sample_id].as_ref().iter().map(|x| x.as_path()).collect::<Vec<_>>(),
-                                                        payload.chunk.tid,
-                                                        payload.chunk.start,
-                                                        payload.chunk.stop,
-                                                        _self.quality_threshold,
-                                                        &_self.filter_homo_polymer_threshold,
-                                                        ),
+                                            coverage: cov,
                                             chunk: payload.chunk,
                                         }
                                 ))
@@ -289,7 +346,8 @@ impl NtoNRunner {
                         },
 
                         MsgTodo::CalcSnps(payload) => {
-                            let result: Vec<ResultRow> = payload.coverage_b.score_differences(payload.coverage_a.as_ref(), _self.min_score, payload.chunk.start);
+                            //let result: Vec<ResultRow> = payload.coverage_b.score_differences(payload.coverage_a.as_ref(), _self.min_score, payload.chunk.start);
+                            let result: Vec<ResultRow> = Vec::new();
                             //debug!(log, "exc: calc snps c: {}, pair: {:?}, result_len: {}", chunk_id, pair, result.len());
                             debug!(log, "Calced {}, {}" ,payload.chunk.chr, payload.chunk.start);
                             result_sender.send(
@@ -349,6 +407,7 @@ impl NtoNRunner {
                                             (payload.sample_id, block.sample_id, block.coverage.clone(), cov.clone())
                                         };
                                     debug!( log, "Sending pair {} {} for chunk {} {}", a, b, payload.chunk.chr, payload.chunk.start);
+                                    //panic!("how much is the memory");
                                     todo_sender
                                         .send(MsgTodo::CalcSnps(
                                                 PayloadTodoCalcSnps{

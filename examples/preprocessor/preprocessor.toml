@@ -1,0 +1,7 @@
+output_dir = "examples/preprocessor/output"
+mode = 'PreProcess'
+
+[samples]
+"A" = ["sample_data/ERR329501.bam"]
+"B" = ["sample_data/GSM1553106.bam"]
+
