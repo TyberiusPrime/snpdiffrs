@@ -105,24 +105,29 @@ impl EncCoverage {
     }
 
     pub fn from_preprocessed(preprocessed_file: &Path) -> Option<Self> {
-        let fh = std::fs::File::open(preprocessed_file).expect("Could not open file");
-        let mut fh = std::io::BufReader::new(fh);
-        let mut result: Vec<EncCoverageEntry> = Vec::new();
         use byteorder::ByteOrder;
         use byteorder::{LittleEndian, ReadBytesExt};
-        let length = fh.read_u64::<LittleEndian>().unwrap();
+
+        let fh = std::fs::File::open(preprocessed_file).expect("Could not open file");
+        let mut fh = std::io::BufReader::new(fh);
+        let mut raw = Vec::new();
+        zstd::stream::copy_decode(&mut fh, &mut raw).expect("decompressing failed");
+        let mut raw = &raw[..];
+
+        let mut result: Vec<EncCoverageEntry> = Vec::new();
+        let length = raw.read_u64::<LittleEndian>().unwrap();
         loop {
-            let offset = match fh.read_u32::<LittleEndian>() {
+            let offset = match raw.read_u32::<LittleEndian>() {
                 Ok(o) => o,
                 Err(_) => {break;}
             };
             result.push(
                 EncCoverageEntry {
                     offset: offset,
-                    count_a: fh.read_u16::<LittleEndian>().unwrap(),
-                    count_c: fh.read_u16::<LittleEndian>().unwrap(),
-                    count_g: fh.read_u16::<LittleEndian>().unwrap(),
-                    count_t: fh.read_u16::<LittleEndian>().unwrap(),
+                    count_a: raw.read_u16::<LittleEndian>().unwrap(),
+                    count_c: raw.read_u16::<LittleEndian>().unwrap(),
+                    count_g: raw.read_u16::<LittleEndian>().unwrap(),
+                    count_t: raw.read_u16::<LittleEndian>().unwrap(),
                 });
         };
         Some(EncCoverage{
@@ -206,12 +211,7 @@ impl EncCoverage {
         let mut element_mine = iter_mine.next();
         let mut element_other = iter_other.next();
         let mut res = Vec::new();
-        let mut counter: u32 = 0;
         loop {
-            counter += 1;
-            if counter %10000 == 0 {
-                println!("counter: {} {:?} {:?}", counter, element_mine, element_other);
-            }
             match (element_mine, element_other) {
                 (None, None) => return res,
                 (None, _) => return res,

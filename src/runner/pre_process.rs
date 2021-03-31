@@ -77,6 +77,10 @@ impl PreProcessRunner {
     }
 
     fn run(self) {
+        use byteorder::ByteOrder;
+        use byteorder::{LittleEndian, WriteBytesExt};
+        use std::io::BufWriter;
+
         let todo: Vec<(Arc<Vec<PathBuf>>, &Chunk, PathBuf)> = self
             .chunks
             .iter()
@@ -115,21 +119,21 @@ impl PreProcessRunner {
                         &self.filter_homo_polymer_threshold,
                     );
                     let cov = EncCoverage::new(&cov);
-                    let fh = File::create(output_filename.clone())
-                        .expect(&format!("Unable to create file {:?}", output_filename));
-                    use byteorder::ByteOrder;
-                    use byteorder::{LittleEndian, WriteBytesExt};
-                    use std::io::BufWriter;
-                    let mut fh = BufWriter::new(fh);
-                    fh.write_u64::<LittleEndian>(cov.len() as u64).unwrap();
+                    let mut raw: Vec<u8>= Vec::new();
+                    raw.write_u64::<LittleEndian>(cov.len() as u64).unwrap();
                     for row in cov.entries {
-                        fh.write_u32::<LittleEndian>(row.offset).unwrap();
-                        fh.write_u16::<LittleEndian>(row.count_a).unwrap();
-                        fh.write_u16::<LittleEndian>(row.count_c).unwrap();
-                        fh.write_u16::<LittleEndian>(row.count_g).unwrap();
-                        fh.write_u16::<LittleEndian>(row.count_t).unwrap();
+                        raw.write_u32::<LittleEndian>(row.offset).unwrap();
+                        raw.write_u16::<LittleEndian>(row.count_a).unwrap();
+                        raw.write_u16::<LittleEndian>(row.count_c).unwrap();
+                        raw.write_u16::<LittleEndian>(row.count_g).unwrap();
+                        raw.write_u16::<LittleEndian>(row.count_t).unwrap();
                     }
                     println!("{}, {}", chunk.chr, chunk.start);
+
+                    let fh = File::create(output_filename.clone())
+                        .expect(&format!("Unable to create file {:?}", output_filename));
+                    let fh = BufWriter::new(fh);
+                    zstd::stream::copy_encode(&raw[..], fh, 9).unwrap();
 
 
 
