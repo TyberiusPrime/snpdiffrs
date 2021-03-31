@@ -181,6 +181,8 @@ impl NtoNRunner {
         let ncores = config.ncores.unwrap_or(num_cpus::get() as u32);
         let max_concurrent_blocks =
             (input_filenames.len() + ncores as usize).max(ncores as usize * 3); //we need at least one per input_filename to create all pairs. And some bonus is helpful to avoid delays.
+        let log = get_logger();
+        debug!(log,"max concurrent blocks {}", max_concurrent_blocks);
 
         NtoNRunner {
             samples,
@@ -262,7 +264,7 @@ impl NtoNRunner {
             log,
             "Expected number of output blocks: {}", expected_number_of_outputs
         );
-        let mut blocks: Vec<Block> = Vec::new(); //the currently loaded blocks.
+        let mut blocks: Vec<Block> = Vec::new(); //the currently loaded blocks. I suppose those should no texceed max_concurrent_blocks
         let remaining_outputs = Mutex::new(expected_number_of_outputs);
 
         thread::scope(|s| {
@@ -365,7 +367,7 @@ impl NtoNRunner {
                     MsgDone::LoadCoverage(payload) => {
                         //Todo: optimize by not putting empty blocks into the pool
                         //debug!(log, "Loadeded Coverage {} {}", chunk_id, sample_id);
-                        debug!(log, "loaded {} {} {}", payload.chunk.chr, payload.chunk.start, payload.coverage.sum());
+                        debug!(log, "loaded {} {} {} {}", payload.chunk.chr, payload.chunk.start, payload.coverage.len(), payload.coverage.sum());
                         load_progress.add(1usize);
                         if load_progress.has_progressed_significantly() {
                             print!("\r{}", load_progress);
@@ -374,6 +376,7 @@ impl NtoNRunner {
                         let cov = Arc::new(payload.coverage);
                         let remaining_uses = expected_number_of_uses_per_block;
                         if !blocks.is_empty() {
+                            let block_count = blocks.len(); //debug
                             for block in
                                 blocks.iter_mut()
                             {
@@ -385,7 +388,7 @@ impl NtoNRunner {
                                         else  {
                                             (payload.sample_id, block.sample_id, block.coverage.clone(), cov.clone())
                                         };
-                                    debug!( log, "Sending pair {} {} for chunk {} {}", a, b, payload.chunk.chr, payload.chunk.start);
+                                    debug!( log, "Sending pair {} {} for chunk {} {}. block count: {}", a, b, payload.chunk.chr, payload.chunk.start, block_count);
                                     //panic!("how much is the memory");
                                     todo_sender
                                         .send(MsgTodo::CalcSnps(
@@ -432,6 +435,7 @@ impl NtoNRunner {
                             if found != 2 {
                                 panic!("a mistake happend and we got back a block that no longer exists: c: {}, pair: {:?}, found: {}", payload.chunk_id, payload.sample_pair, found);
                             }
+                            let deleted_count = to_delete.len();
                             for ii in to_delete.iter().rev() {
                                 debug!(log, "deleting block at {} - arc count strong: {} weak; {}", ii, 
                                     Arc::strong_count(&blocks[*ii].coverage),
@@ -439,9 +443,11 @@ impl NtoNRunner {
                                 );
                                 blocks.remove(*ii);
                             }
-                        if blocks.len() < _self.max_concurrent_blocks {
-                                for _ in blocks.len().._self.max_concurrent_blocks {
-                                Self::_push_next_block(&mut block_iterator.lock().unwrap(), &todo_sender);
+                            if deleted_count >= 0 {
+                                let mut bi = block_iterator.lock().unwrap(); //let's lock this for the whole block
+                                debug!(log, "Pushing {} new blocks", deleted_count);
+                                for _ in 0..deleted_count {
+                                    Self::_push_next_block(&mut bi, &todo_sender);
                                 }
                             }
                         },

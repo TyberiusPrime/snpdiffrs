@@ -147,29 +147,23 @@ impl Coverage {
 
     pub fn from_preprocessed(preprocessed_file: &Path) -> Option<Self> {
         use safe_transmute::transmute_one;
-        use std::fs::File;
+        use std::fs::{File, metadata};
         use std::io::Read;
+        use byteorder::{ReadBytesExt, NativeEndian};
 
-        let fh = File::open(preprocessed_file).expect("Failed to open file");
-        let mut decompressed = Vec::new();
-        zstd::stream::copy_decode(fh, &mut decompressed).expect("Failed decompression");
-        let bytes_per_row = 2 * 4;
-        let row_count = decompressed.len() / (2 * 4);
-        let mut inner: Array2<u16> = Array2::zeros((row_count, 4));
-        for i in 0..row_count {
-            inner[(i, 0)] =
-                transmute_one::<u16>(&decompressed[i * bytes_per_row..i * bytes_per_row + 2])
-                    .expect("transmuet");
-            inner[(i, 1)] =
-                transmute_one::<u16>(&decompressed[i * bytes_per_row + 2..i * bytes_per_row + 4])
-                    .expect("transmuet");
-            inner[(i, 2)] =
-                transmute_one::<u16>(&decompressed[i * bytes_per_row + 4..i * bytes_per_row + 6])
-                    .expect("transmuet");
-            inner[(i, 3)] =
-                transmute_one::<u16>(&decompressed[i * bytes_per_row + 6..i * bytes_per_row + 8])
-                    .expect("transmuet");
-        }
+        let mut fh = File::open(preprocessed_file).expect("Failed to open file");
+        let filelen = metadata(preprocessed_file).unwrap().len() as usize;
+        //let mut decompressed = Vec::new();
+        //zstd::stream::copy_decode(fh, &mut decompressed).expect("Failed decompression");
+
+        let mut decompressed: Vec<u16> = Vec::with_capacity(filelen);
+        unsafe { decompressed.set_len(filelen /2 ); }
+        fh.read_u16_into::<NativeEndian>(&mut decompressed[..]).expect("read_u16_into");
+       // fh.read_to_end(&mut decompressed).expect("read");
+
+        let row_count = decompressed.len() / (4);
+
+        let inner = Array2::from_shape_vec((row_count, 4), decompressed).expect("From_shape_vec");
         return Some(Coverage(inner));
 
         //        Some(Coverage::new(50_000_000))

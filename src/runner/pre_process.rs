@@ -116,13 +116,14 @@ impl PreProcessRunner {
                     );
 
                     //lz4_hc::compress_to_vec(data, &mut comp, lz4_hc::CLEVEL_DEFAULT)?;
-                    let fh = File::create(output_filename.clone())
+                    let mut fh = File::create(output_filename.clone())
                         .expect(&format!("Unable to create file {:?}", output_filename));
                     use safe_transmute::{transmute_to_bytes, SingleManyGuard};
 
                     let raw = cov.into_raw_vec();
                     let raw_v8: &[u8] = transmute_to_bytes(&raw[..]);
-                    zstd::stream::copy_encode(raw_v8, fh, 9).unwrap();
+                    //zstd::stream::copy_encode(raw_v8, fh, 9).unwrap();
+                    fh.write_all(raw_v8).unwrap();
                 }
             })
             .collect();
