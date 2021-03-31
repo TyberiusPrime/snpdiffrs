@@ -63,16 +63,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3441f0f7b02788e948e47f457ca01f1d7e6d92c693bc132c22b087d3141c03ff"
 
 [[package]]
-name = "bincode"
-version = "1.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d175dfa69e619905c4c3cdb7c3c203fa3bdd5d51184e3afdb2742c0280493772"
-dependencies = [
- "byteorder",
- "serde",
-]
-
-[[package]]
 name = "bio-types"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -105,9 +95,9 @@ dependencies = [
 
 [[package]]
 name = "byteorder"
-version = "1.3.4"
+version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08c48aae112d48ed9f069b33538ea9e3e90aa263cfa3d1c24309612b1f7472de"
+checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
 
 [[package]]
 name = "bzip2-sys"
@@ -797,6 +787,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26412eb97c6b088a6997e05f69403a802a92d520de2f8e63c2b65f9e0f47c4e8"
 
 [[package]]
+name = "rle_vec"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a14622f24cef977254293d3ff9571eb70e3b37c9bee038910c597b635860401"
+
+[[package]]
 name = "rust-argon2"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -908,7 +904,7 @@ name = "snpdiffrs"
 version = "0.1.1"
 dependencies = [
  "approx 0.3.2",
- "bincode",
+ "byteorder",
  "crossbeam",
  "itertools 0.9.0",
  "lazy_static",
@@ -920,6 +916,7 @@ dependencies = [
  "num_cpus",
  "progressing",
  "rayon",
+ "rle_vec",
  "rust-htslib",
  "safe-transmute",
  "serde",

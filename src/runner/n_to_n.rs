@@ -1,5 +1,5 @@
 use crate::chunked_genome::{Chunk, ChunkedGenome};
-use crate::coverage::{Coverage, ResultRow};
+use crate::coverage::{Coverage, ResultRow, EncCoverage};
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -77,8 +77,8 @@ struct PayloadTodoLoadCoverage {
 struct PayloadTodoCalcSnps {
     chunk_id: usize,
     sample_pair: [usize; 2],
-    coverage_a: Arc<Coverage>,
-    coverage_b: Arc<Coverage>,
+    coverage_a: Arc<EncCoverage>,
+    coverage_b: Arc<EncCoverage>,
     chunk: Chunk,
 }
 
@@ -100,7 +100,7 @@ enum MsgTodo {
 struct PayloadDoneLoadCoverage {
     chunk_id: usize,
     sample_id: usize,
-    coverage: Coverage,
+    coverage: EncCoverage,
     chunk: Chunk,
 }
 
@@ -144,7 +144,7 @@ struct NtoNRunner {
 struct Block {
     chunk_id: usize,
     sample_id: usize,
-    coverage: Arc<Coverage>,
+    coverage: Arc<EncCoverage>,
     remaining_uses: usize,
 }
 
@@ -282,7 +282,7 @@ impl NtoNRunner {
                         MsgTodo::LoadCoverage(payload) => {
                             //debug!(log, "exc: Load_coverage: c:{} i:{}", chunk_no, input_no);
                             debug!(log, "Loading {} {}", payload.chunk.chr, payload.chunk.start);
-                            let cov: Option<Coverage> = match _self.preprocessed_dir.as_ref() {
+                            let cov: Option<EncCoverage> = match _self.preprocessed_dir.as_ref() {
                                 Some(pd) => {
                                     let full_pd = pd.join(format!(
                                         "{}_bs={}_q={}_homo_polymer={}.snpdiff_block",_self.samples[payload.sample_id],
@@ -300,20 +300,20 @@ impl NtoNRunner {
                                         println!("Could not load preprocessed data: {:?}", filename);
                                         None
                                     } else {
-                                        Coverage::from_preprocessed(&filename)
+                                        EncCoverage::from_preprocessed(&filename)
                                     }
                                 },
                                 None => None
                             };
-                            let cov: Coverage = match cov {
+                            let cov: EncCoverage = match cov {
                                 Some(cov) => cov,
-                                None => Coverage::from_bams(&_self.input_filenames[payload.sample_id].as_ref().iter().map(|x| x.as_path()).collect::<Vec<_>>(),
+                                None => EncCoverage::new(&Coverage::from_bams(&_self.input_filenames[payload.sample_id].as_ref().iter().map(|x| x.as_path()).collect::<Vec<_>>(),
                                         payload.chunk.tid,
                                         payload.chunk.start,
                                         payload.chunk.stop,
                                         _self.quality_threshold,
                                         &_self.filter_homo_polymer_threshold,
-                                )
+                                ))
                             };
 
 
@@ -443,7 +443,7 @@ impl NtoNRunner {
                                 );
                                 blocks.remove(*ii);
                             }
-                            if deleted_count >= 0 {
+                            if deleted_count > 0 {
                                 let mut bi = block_iterator.lock().unwrap(); //let's lock this for the whole block
                                 debug!(log, "Pushing {} new blocks", deleted_count);
                                 for _ in 0..deleted_count {

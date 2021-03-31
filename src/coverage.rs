@@ -34,7 +34,6 @@ fn vector_arg_max(input: &[f32; 11]) -> (f32, usize) {
 /// we only count to u16 (65k) to same on memory.
 /// At those sequencing depths we overrun our f32
 /// probably anyhow.
-#[derive(Serialize, Deserialize)]
 pub struct Coverage(pub Array2<u16>);
 
 impl std::fmt::Debug for Coverage {
@@ -66,6 +65,182 @@ fn u32_to_u16_saturating(input: u32) -> u16 {
         input as u16
     }
 }
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct EncCoverageEntry {
+    pub offset: u32,
+    pub count_a: u16,
+    pub count_c: u16,
+    pub count_g: u16,
+    pub count_t: u16,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EncCoverage{
+    pub entries: Vec<EncCoverageEntry>,
+    length: usize,
+
+}
+
+impl EncCoverage {
+    pub fn new(input: &Coverage) -> EncCoverage {
+        let mut res = Vec::new();
+        for (ii, row) in input.0.axis_iter(Axis(0)).enumerate()
+        {
+            if row[0] != 0 ||
+                row[1] != 0 ||
+                row[2] != 0 ||
+                row[3] != 0 {
+                    res.push(
+                        EncCoverageEntry{
+                            offset: ii as u32,
+                            count_a: row[0],
+                            count_c: row[1],
+                            count_g: row[2],
+                            count_t: row[3],
+                });
+            }
+        }
+        EncCoverage{entries: res, length: input.0.len()}
+    }
+
+    pub fn from_preprocessed(preprocessed_file: &Path) -> Option<Self> {
+        let fh = std::fs::File::open(preprocessed_file).expect("Could not open file");
+        let mut fh = std::io::BufReader::new(fh);
+        let mut result: Vec<EncCoverageEntry> = Vec::new();
+        use byteorder::ByteOrder;
+        use byteorder::{LittleEndian, ReadBytesExt};
+        let length = fh.read_u64::<LittleEndian>().unwrap();
+        loop {
+            let offset = match fh.read_u32::<LittleEndian>() {
+                Ok(o) => o,
+                Err(_) => {break;}
+            };
+            result.push(
+                EncCoverageEntry {
+                    offset: offset,
+                    count_a: fh.read_u16::<LittleEndian>().unwrap(),
+                    count_c: fh.read_u16::<LittleEndian>().unwrap(),
+                    count_g: fh.read_u16::<LittleEndian>().unwrap(),
+                    count_t: fh.read_u16::<LittleEndian>().unwrap(),
+                });
+        };
+        Some(EncCoverage{
+            entries: result,
+            length: length as usize,
+        })
+    }
+
+    pub fn sum(&self) -> usize {
+        let mut total: usize = 0;
+        for row in self.entries.iter() {
+            total += row.count_a as usize;
+            total += row.count_c as usize;
+            total += row.count_g as usize;
+            total += row.count_t as usize;
+        }
+        total
+    }
+
+    pub fn len(&self)  -> usize{
+        self.length
+    }
+
+    fn score_single_difference(mine: &EncCoverageEntry, other: &EncCoverageEntry, result: &mut Vec<ResultRow>, min_score: f32, offset: u32) {
+        // this is a huge speed up for sparse bams.
+        // and all rnaseqs are sparse, right
+        let sa = mine.count_a;
+        let sc = mine.count_c;
+        let sg = mine.count_g;
+        let st = mine.count_t;
+        if sa == 0 && sc == 0 && sg == 0 && st == 0 {
+            panic!("should not happen");
+        }
+        let oa = other.count_a;
+        let oc = other.count_c;
+        let og = other.count_g;
+        let ot = other.count_t;
+        if oa == 0 && oc == 0 && og == 0 && ot == 0 {
+            panic!("should not happen2");
+        }
+        let (self_max, self_argmax) =
+            Coverage::single_log_likelihood_max_arg_max(sa, sc, sg, st);
+        let ((other_max, other_argmax), other_self_argmax) =
+            Coverage::single_log_likelihood_max_arg_max_plus_other(oa, oc, og, ot, self_argmax);
+        if self_argmax == other_argmax {
+            // no disagreement
+            return;
+        }
+        let self_other_argmax = Coverage::single_log_likelihood(sa, sc, sg, st, other_argmax);
+
+        let ll_differing = self_max + other_max;
+        let ll_same_haplotype_a = self_max + other_self_argmax;
+        let ll_same_haplotype_b = self_other_argmax + other_max;
+        let ll_same = ll_same_haplotype_a.max(ll_same_haplotype_b);
+        let score = ll_differing - ll_same;
+        if score >= min_score {
+            result.push(ResultRow {
+                relative_pos: mine.offset as u32 + offset,
+                count_self_a: sa,
+                count_self_c: sc,
+                count_self_g: sg,
+                count_self_t: st,
+                count_other_a: oa,
+                count_other_c: oc,
+                count_other_g: og,
+                count_other_t: ot,
+                haplotype_self: self_argmax as u8,
+                haplotype_other: other_argmax as u8,
+                score,
+            });
+        }
+    }
+
+    pub fn score_differences(&self, other: &Self, min_score: f32, offset: u32) -> Vec<ResultRow> {
+        use std::cmp::Ordering;
+        if self.len() == 0 || other.len() == 0 {
+            return Vec::new();
+        }
+        let mut iter_mine = self.entries.iter();
+        let mut iter_other = other.entries.iter();
+        let mut element_mine = iter_mine.next();
+        let mut element_other = iter_other.next();
+        let mut res = Vec::new();
+        let mut counter: u32 = 0;
+        loop {
+            counter += 1;
+            if counter %10000 == 0 {
+                println!("counter: {} {:?} {:?}", counter, element_mine, element_other);
+            }
+            match (element_mine, element_other) {
+                (None, None) => return res,
+                (None, _) => return res,
+                (_, None,)  => return res,
+                (Some(m), Some(o)) => {
+                    match m.offset.cmp(&o.offset) {
+                        Ordering::Equal => {
+                            EncCoverage::score_single_difference(m, o, &mut res, min_score, offset);
+                            element_mine = iter_mine.next();
+                            element_other = iter_other.next();
+                        },
+                        Ordering::Less => element_mine = iter_mine.next(),
+                        Ordering::Greater => element_other = iter_other.next(),
+                        }
+                    }
+
+                }
+            }
+    }
+}
+
+impl std::fmt::Debug for EncCoverage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EncCoverage")
+    }
+}
+
+
+
 impl Coverage {
     pub fn new(length: usize) -> Coverage {
         Coverage(Array2::zeros((length, 4)))
@@ -143,30 +318,6 @@ impl Coverage {
         } else {
             Coverage::new(0)
         }
-    }
-
-    pub fn from_preprocessed(preprocessed_file: &Path) -> Option<Self> {
-        use safe_transmute::transmute_one;
-        use std::fs::{File, metadata};
-        use std::io::Read;
-        use byteorder::{ReadBytesExt, NativeEndian};
-
-        let mut fh = File::open(preprocessed_file).expect("Failed to open file");
-        let filelen = metadata(preprocessed_file).unwrap().len() as usize;
-        //let mut decompressed = Vec::new();
-        //zstd::stream::copy_decode(fh, &mut decompressed).expect("Failed decompression");
-
-        let mut decompressed: Vec<u16> = Vec::with_capacity(filelen);
-        unsafe { decompressed.set_len(filelen /2 ); }
-        fh.read_u16_into::<NativeEndian>(&mut decompressed[..]).expect("read_u16_into");
-       // fh.read_to_end(&mut decompressed).expect("read");
-
-        let row_count = decompressed.len() / (4);
-
-        let inner = Array2::from_shape_vec((row_count, 4), decompressed).expect("From_shape_vec");
-        return Some(Coverage(inner));
-
-        //        Some(Coverage::new(50_000_000))
     }
 
     pub fn sum(&self) -> usize {

@@ -1,6 +1,6 @@
 use super::{all_files_exists, ensure_output_dir, get_logger, haplotype_const_to_str, RunConfig};
 use crate::chunked_genome::{Chunk, ChunkedGenome};
-use crate::coverage::{Coverage, ResultRow};
+use crate::coverage::{Coverage, ResultRow, EncCoverage};
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -114,6 +114,26 @@ impl PreProcessRunner {
                         self.quality_threshold,
                         &self.filter_homo_polymer_threshold,
                     );
+                    let cov = EncCoverage::new(&cov);
+                    let fh = File::create(output_filename.clone())
+                        .expect(&format!("Unable to create file {:?}", output_filename));
+                    use byteorder::ByteOrder;
+                    use byteorder::{LittleEndian, WriteBytesExt};
+                    use std::io::BufWriter;
+                    let mut fh = BufWriter::new(fh);
+                    fh.write_u64::<LittleEndian>(cov.len() as u64).unwrap();
+                    for row in cov.entries {
+                        fh.write_u32::<LittleEndian>(row.offset).unwrap();
+                        fh.write_u16::<LittleEndian>(row.count_a).unwrap();
+                        fh.write_u16::<LittleEndian>(row.count_c).unwrap();
+                        fh.write_u16::<LittleEndian>(row.count_g).unwrap();
+                        fh.write_u16::<LittleEndian>(row.count_t).unwrap();
+                    }
+                    println!("{}, {}", chunk.chr, chunk.start);
+
+
+
+                    /*
 
                     //lz4_hc::compress_to_vec(data, &mut comp, lz4_hc::CLEVEL_DEFAULT)?;
                     let mut fh = File::create(output_filename.clone())
@@ -124,6 +144,7 @@ impl PreProcessRunner {
                     let raw_v8: &[u8] = transmute_to_bytes(&raw[..]);
                     //zstd::stream::copy_encode(raw_v8, fh, 9).unwrap();
                     fh.write_all(raw_v8).unwrap();
+                    */
                 }
             })
             .collect();
