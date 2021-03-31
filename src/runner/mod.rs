@@ -109,12 +109,12 @@ fn haplotype_const_to_str(haplotype: u8) -> &'static str {
 }
 
 #[allow(dead_code)]
-fn get_logger() -> slog::Logger {
+pub fn get_logger() -> slog::Logger {
     use slog::{o, Drain};
 
     let decorator = slog_term::TermDecorator::new().build();
     let drain = slog_term::CompactFormat::new(decorator).build().fuse();
-    let drain = slog_async::Async::new(drain).build().fuse();
+    let drain = slog_async::Async::new(drain).chan_size(20000).build().fuse();
 
     slog::Logger::root(drain, o!())
 }

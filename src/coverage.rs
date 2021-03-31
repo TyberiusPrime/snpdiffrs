@@ -35,7 +35,7 @@ fn vector_arg_max(input: &[f32; 11]) -> (f32, usize) {
 /// At those sequencing depths we overrun our f32
 /// probably anyhow.
 #[derive(Serialize, Deserialize)]
-pub struct Coverage(Array2<u16>);
+pub struct Coverage(pub Array2<u16>);
 
 impl std::fmt::Debug for Coverage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -150,7 +150,7 @@ impl Coverage {
         use std::fs::File;
         use std::io::Read;
 
-        let mut fh = File::open(preprocessed_file).expect("Failed to open file");
+        let fh = File::open(preprocessed_file).expect("Failed to open file");
         let mut decompressed = Vec::new();
         zstd::stream::copy_decode(fh, &mut decompressed).expect("Failed decompression");
         let bytes_per_row = 2 * 4;
@@ -173,6 +173,17 @@ impl Coverage {
         return Some(Coverage(inner));
 
         //        Some(Coverage::new(50_000_000))
+    }
+
+    pub fn sum(&self) -> usize {
+        let mut total: usize = 0;
+        for i in 0..self.0.shape()[0] {
+            total += self.0[(i, 0)] as usize;
+            total += self.0[(i, 1)] as usize;
+            total += self.0[(i, 2)] as usize;
+            total += self.0[(i, 3)] as usize;
+        }
+        total
     }
 
     pub fn head(&self) {
@@ -470,7 +481,7 @@ impl Coverage {
     }
 
     pub fn into_raw_vec(self) -> Vec<u16> {
-        self.0.into_raw_vec()
+        self.0.into_raw_vec() //todo: this is broken by drop
     }
 
     pub fn equal(&self, other: &Self) -> bool {
@@ -480,11 +491,18 @@ impl Coverage {
     pub fn shape(&self) -> &[usize] {
         self.0.shape()
     }
+}
 
-    pub fn capacity(&self) -> usize {
-        self.0.capacity()
+/*
+impl Drop for Coverage {
+    fn drop(&mut self) {
+        use slog::debug;
+        use crate::runner::get_logger;
+        let log = get_logger();
+        debug!(log, "Dropped coverage");
     }
 }
+*/
 
 pub(crate) struct BaseCounts {
     pub a: u64,

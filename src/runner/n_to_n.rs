@@ -94,7 +94,6 @@ enum MsgTodo {
     LoadCoverage(PayloadTodoLoadCoverage),
     CalcSnps(PayloadTodoCalcSnps),
     OutputResult(PayloadTodoOutputResult),
-    Quit,
 }
 
 #[derive(Debug)]
@@ -118,7 +117,6 @@ enum MsgDone {
     LoadCoverage(PayloadDoneLoadCoverage), //chunk, sample_id,
     CalcSnps(PayloadDoneCalcSnps),
     OutputDone,
-    QuitDone,
 }
 
 #[allow(clippy::type_complexity)]
@@ -231,6 +229,9 @@ impl NtoNRunner {
         //debug!(log, "ncores: {}", ncores);
 
         let expected_number_of_uses_per_block = { self.input_filenames.len() - 1 }; //in each pair we count both blocks, but we don't compare a block to itself.
+        let expected_number_of_outputs =
+            self.input_filenames.len() * (self.input_filenames.len() - 1) / 2 * chunk_count;
+
         let mut load_progress = MappingBar::with_range(
             0,
             block_iterator.len()
@@ -257,9 +258,13 @@ impl NtoNRunner {
             log,
             "Expected number of uses for each block: {}", expected_number_of_uses_per_block
         );
+        debug!(
+            log,
+            "Expected number of output blocks: {}", expected_number_of_outputs
+        );
         let mut blocks: Vec<Block> = Vec::new(); //the currently loaded blocks.
+        let remaining_outputs = Mutex::new(expected_number_of_outputs);
 
-        let mut quit_counter = 0;
         thread::scope(|s| {
         let block_iterator = block_iterator.clone();
         let _self = _self.clone();
@@ -293,34 +298,12 @@ impl NtoNRunner {
                                         println!("Could not load preprocessed data: {:?}", filename);
                                         None
                                     } else {
-                                        let r = Coverage::from_preprocessed(&filename);
-                                        match r {
-                                            Some(x) => {
-                                                let should = Coverage::from_bams(&_self.input_filenames[payload.sample_id].as_ref().iter().map(|x| x.as_path()).collect::<Vec<_>>(),
-                                        payload.chunk.tid,
-                                        payload.chunk.start,
-                                        payload.chunk.stop,
-                                        _self.quality_threshold,
-                                        &_self.filter_homo_polymer_threshold,
-                                );
-                                                if !x.equal(&should) {
-                                                    println!("not equal! {} {}", x.len(), should.len());
-                                                    //x.first_delta(&should);
-                                                   // panic!("");
-                                                } else {
-                                                    println!("equal");
-                                                    println!("shapes: {:?} {:?}", x.shape(), should.shape());
-                                                }
-                                                //Some(should) //works
-                                                Some(x) //OOM
-                                            }
-                                            None => (panic!("at the disco"))
-                                        }
+                                        Coverage::from_preprocessed(&filename)
                                     }
                                 },
                                 None => None
                             };
-                            /*let cov: Coverage = match cov {
+                            let cov: Coverage = match cov {
                                 Some(cov) => cov,
                                 None => Coverage::from_bams(&_self.input_filenames[payload.sample_id].as_ref().iter().map(|x| x.as_path()).collect::<Vec<_>>(),
                                         payload.chunk.tid,
@@ -330,8 +313,6 @@ impl NtoNRunner {
                                         &_self.filter_homo_polymer_threshold,
                                 )
                             };
-                            */
-                            let cov = cov.unwrap();
 
 
                             result_sender
@@ -347,8 +328,11 @@ impl NtoNRunner {
                         },
 
                         MsgTodo::CalcSnps(payload) => {
-                            //let result: Vec<ResultRow> = payload.coverage_b.score_differences(payload.coverage_a.as_ref(), _self.min_score, payload.chunk.start);
-                            let result: Vec<ResultRow> = Vec::new();
+                            let result: Vec<ResultRow> = payload.coverage_b.score_differences(
+                                payload.coverage_a.as_ref(),
+                                _self.min_score,
+                                payload.chunk.start);
+                            //let result: Vec<ResultRow> = Vec::new();
                             //debug!(log, "exc: calc snps c: {}, pair: {:?}, result_len: {}", chunk_id, pair, result.len());
                             debug!(log, "Calced {}, {}" ,payload.chunk.chr, payload.chunk.start);
                             result_sender.send(
@@ -361,18 +345,12 @@ impl NtoNRunner {
 
                         MsgTodo::OutputResult(payload) => {
                             //debug!(log, "exc: output results for chr: {}, start: {}, count: {}, first entry: {}", chunk.chr, chunk.start, result_rows.len(), if result_rows.is_empty() {0} else {result_rows[0].relative_pos});
-                            debug!(log, "writing {}, {}", payload.chunk.chr, payload.chunk.start);
+                            debug!(log, "writing {}, {} {}", payload.chunk.chr, payload.chunk.start, payload.result_rows.len());
                             write_results(
                                 &mut payload.output.lock().unwrap(),
                                 &payload.chunk.chr,
                                 0, payload.result_rows);
                             result_sender.send(MsgDone::OutputDone).expect("could not signal OutputDone");
-                        }
-
-                        MsgTodo::Quit => {
-                            debug!(log, "exc: quit: {}", nn);
-                            result_sender.send(MsgDone::QuitDone).expect("Could not send QuitDone");
-                            return;
                         }
                     }
                 }
@@ -380,14 +358,14 @@ impl NtoNRunner {
         }
         s.spawn(move |_s2| {
             //and this is the managing thread
-            //needs to be a seprate spawn so that the panics! work as intended
+            //needs to be a separate spawn so that the panics! work as intended
             for res in result_receiver.iter() {
                 debug!(log, "Received a result: {:?}", res);
                 match res {
                     MsgDone::LoadCoverage(payload) => {
                         //Todo: optimize by not putting empty blocks into the pool
                         //debug!(log, "Loadeded Coverage {} {}", chunk_id, sample_id);
-                        debug!(log, "loaded {} {}", payload.chunk.chr, payload.chunk.start);
+                        debug!(log, "loaded {} {} {}", payload.chunk.chr, payload.chunk.start, payload.coverage.sum());
                         load_progress.add(1usize);
                         if load_progress.has_progressed_significantly() {
                             print!("\r{}", load_progress);
@@ -452,10 +430,13 @@ impl NtoNRunner {
                                 }
                             }
                             if found != 2 {
-                                panic!("you made a mistake and we got back a block that no longer exists: c: {}, pair: {:?}, found: {}", payload.chunk_id, payload.sample_pair, found);
+                                panic!("a mistake happend and we got back a block that no longer exists: c: {}, pair: {:?}, found: {}", payload.chunk_id, payload.sample_pair, found);
                             }
                             for ii in to_delete.iter().rev() {
-                                debug!(log, "deleting block at {}", ii);
+                                debug!(log, "deleting block at {} - arc count strong: {} weak; {}", ii, 
+                                    Arc::strong_count(&blocks[*ii].coverage),
+                                    Arc::weak_count(&blocks[*ii].coverage),
+                                );
                                 blocks.remove(*ii);
                             }
                         if blocks.len() < _self.max_concurrent_blocks {
@@ -465,19 +446,13 @@ impl NtoNRunner {
                             }
                         },
                     MsgDone::OutputDone => {
-                    if block_iterator.lock().unwrap().is_empty() && blocks.is_empty() { //no more work incoming, and everything done.
-                        //debug!(log, "block_iterator empty - preparing to leave");
-                            for _nn in 0.._self.ncores {
-                                todo_sender.send(MsgTodo::Quit).unwrap();
-                            }
-                        }
-                    }
-                    MsgDone::QuitDone => {
-                        quit_counter += 1;
-                        if quit_counter == _self.ncores {
-                            break;
-                        }
-
+                        let mut rr = remaining_outputs.lock().unwrap();
+                            *rr -= 1;
+                                debug!(log, "MsgDone:OutputDone - remaining outputs {}", *rr);
+                            if *rr == 0 {
+                                debug!(log, "all expected outputs done");
+                                break
+                            };
                     }
                 }
             }
@@ -485,6 +460,8 @@ impl NtoNRunner {
         });
         })
         .expect("An error occured in one of the scoped threads");
+        let log = get_logger();
+        debug!(log, "Left loop");
 
         drop(Arc::get_mut(&mut _self).unwrap().outputs.take());
         _self
@@ -498,6 +475,7 @@ impl NtoNRunner {
                 .unwrap()
             })
             .for_each(|_| {});
+        debug!(log, "Done with dropping");
     }
 }
 
