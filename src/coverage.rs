@@ -76,46 +76,107 @@ pub struct EncCoverageEntry {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct EncCoverage{
+pub struct EncCoverage {
     pub entries: Vec<EncCoverageEntry>,
     length: usize,
-
 }
 
 impl EncCoverage {
     pub fn new(input: &Coverage) -> EncCoverage {
         let mut res = Vec::new();
-        for (ii, row) in input.0.axis_iter(Axis(0)).enumerate()
-        {
-            if row[0] != 0 ||
-                row[1] != 0 ||
-                row[2] != 0 ||
-                row[3] != 0 {
-                    res.push(
-                        EncCoverageEntry{
-                            offset: ii as u32,
-                            count_a: row[0],
-                            count_c: row[1],
-                            count_g: row[2],
-                            count_t: row[3],
+        for (ii, row) in input.0.axis_iter(Axis(0)).enumerate() {
+            if row[0] != 0 || row[1] != 0 || row[2] != 0 || row[3] != 0 {
+                res.push(EncCoverageEntry {
+                    offset: ii as u32,
+                    count_a: row[0],
+                    count_c: row[1],
+                    count_g: row[2],
+                    count_t: row[3],
                 });
             }
         }
-        EncCoverage{entries: res, length: input.0.len()}
+        EncCoverage {
+            entries: res,
+            length: input.0.len(),
+        }
     }
 
-    pub fn from_preprocessed(preprocessed_file: &Path) -> Option<Self> {
-        use byteorder::ByteOrder;
-        use byteorder::{LittleEndian, ReadBytesExt};
+    fn to_file_bincode(&self, output_filename: &Path) -> Result<(), std::io::Error> {
+        use std::fs::File;
+        use std::io::{BufWriter, Error, ErrorKind, Write};
+        let temp_fn = output_filename.with_extension(".tmp");
+        let fh = File::create(&temp_fn)?;
+        let fh = BufWriter::new(fh);
+        let mut output: Vec<u8> = Vec::new();
+        bincode::serialize_into(&mut output, &self)
+            .map_err(|e| Error::new(ErrorKind::Other, format!("{}", e)))?;
+        //run&calc, run&cached, cache size
+        //zstd 9           - 45s   / 3.2s / 321M
+        //zstd 5           - 37s   / 4.65 / 406M
+        //zstd 1           - 30s   / 3.4s / 429M
+        //brotli 5         - 69s   / 4.4s / 332M
+        //lzma_rs::lzma2   - 29.5s / 3.4 / 885M
+        //lzma_rs::xs      - 29.6s / 3.9s / 885M
+        //snap             - 29.5s / 3.2s /  575M
+        zstd::stream::copy_encode(&output[..], fh, 9)?;
+        std::fs::rename(temp_fn, output_filename)?;
+        Ok(())
+    }
 
-        let fh = std::fs::File::open(preprocessed_file).expect("Could not open file");
+    fn from_file_bincode(preprocessed_file: &Path) -> Option<Self> {
+        let fh = std::fs::File::open(preprocessed_file).ok()?;
         let mut fh = std::io::BufReader::new(fh);
         let mut raw = Vec::new();
-        zstd::stream::copy_decode(&mut fh, &mut raw).expect("decompressing failed");
+        zstd::stream::copy_decode(&mut fh, &mut raw).ok()?;
+        let decoded: EncCoverage = bincode::deserialize_from(&raw[..]).ok()?;
+        Some(decoded)
+    }
+
+    /*
+     doing it ourselves with byteorder is within measurement tolerance
+    of just using bincode.
+    And bincode should have better error detection, I suppose.
+
+    fn to_file_byteorder(&self, output_filename: &Path) -> Result<(), std::io::Error>
+    {
+        use std::fs::File;
+        use std::io::{BufWriter, Error, ErrorKind};
+        use byteorder::ByteOrder;
+        use byteorder::{LittleEndian, WriteBytesExt};
+        let mut raw: Vec<u8>= Vec::new();
+        raw.write_u64::<LittleEndian>(self.len() as u64).unwrap();
+        for row in &self.entries {
+            raw.write_u32::<LittleEndian>(row.offset).unwrap();
+            raw.write_u16::<LittleEndian>(row.count_a).unwrap();
+            raw.write_u16::<LittleEndian>(row.count_c).unwrap();
+            raw.write_u16::<LittleEndian>(row.count_g).unwrap();
+            raw.write_u16::<LittleEndian>(row.count_t).unwrap();
+        }
+
+        let fh = File::create(output_filename.clone())
+            .expect(&format!("Unable to create file {:?}", output_filename));
+        let fh = BufWriter::new(fh);
+        zstd::stream::copy_encode(&raw[..], fh, 9).unwrap();
+        Ok(())
+
+    }
+
+
+    fn from_file_byteorder(preprocessed_file: &Path) -> Option<Self> {
+
+        use byteorder::ByteOrder;
+        use byteorder::{LittleEndian, ReadBytesExt};
+        use std::fs::File;
+        use std::io::{BufReader, Error, ErrorKind};
+
+        let fh = std::fs::File::open(preprocessed_file).ok()?;
+        let mut fh = std::io::BufReader::new(fh);
+        let mut raw = Vec::new();
+        zstd::stream::copy_decode(&mut fh, &mut raw).ok()?;
         let mut raw = &raw[..];
 
         let mut result: Vec<EncCoverageEntry> = Vec::new();
-        let length = raw.read_u64::<LittleEndian>().unwrap();
+        let length = raw.read_u64::<LittleEndian>().ok()?;
         loop {
             let offset = match raw.read_u32::<LittleEndian>() {
                 Ok(o) => o,
@@ -124,16 +185,61 @@ impl EncCoverage {
             result.push(
                 EncCoverageEntry {
                     offset: offset,
-                    count_a: raw.read_u16::<LittleEndian>().unwrap(),
-                    count_c: raw.read_u16::<LittleEndian>().unwrap(),
-                    count_g: raw.read_u16::<LittleEndian>().unwrap(),
-                    count_t: raw.read_u16::<LittleEndian>().unwrap(),
+                    count_a: raw.read_u16::<LittleEndian>().ok()?,
+                    count_c: raw.read_u16::<LittleEndian>().ok()?,
+                    count_g: raw.read_u16::<LittleEndian>().ok()?,
+                    count_t: raw.read_u16::<LittleEndian>().ok()?,
                 });
         };
         Some(EncCoverage{
             entries: result,
             length: length as usize,
         })
+    }
+    */
+    /*
+
+    fn from_file_postcard(preprocessed_file: &Path) -> Option<Self> {
+        use std::fs::File;
+        use std::io::{BufReader, Error, ErrorKind};
+
+        let fh = std::fs::File::open(preprocessed_file).ok()?;
+        let mut fh = std::io::BufReader::new(fh);
+        let mut raw = Vec::new();
+        zstd::stream::copy_decode(&mut fh, &mut raw).ok()?;
+        let raw = &raw[..];
+        postcard::from_bytes(raw).ok()?
+
+    }
+
+    fn to_file_postcard(&self, output_filename: &Path) -> Result<(), std::io::Error> {
+        use std::fs::File;
+        use std::io::{BufWriter, Error, ErrorKind};
+
+        let raw: Vec<u8> = postcard::to_allocvec(&self).map_err(|e| Error::new(ErrorKind::Other, format!("{}", e)))?;
+        let fh = File::create(output_filename.clone())
+            .expect(&format!("Unable to create file {:?}", output_filename));
+        let fh = BufWriter::new(fh);
+        zstd::stream::copy_encode(&raw[..], fh, 9).unwrap();
+        Ok(())
+
+    }
+    */
+
+    /* the direct (byteorder) approach, bincode, and postcard
+     * all produce essentially equally sized output files
+     * and run within the measurement uncertainty of each other
+     * on the sample datasets (GSM1553106 and ERR329501).
+     * So I'll go with bincode, because
+     * a) I can extend to a 'either EncCov or Cov' approach later on
+     * b) it has 2 orders of magnitude more downloads on crates.io
+     */
+    pub fn to_file(&self, output_filename: &Path) -> Result<(), std::io::Error> {
+        self.to_file_bincode(output_filename)
+    }
+
+    pub fn from_file(preprocessed_file: &Path) -> Option<Self> {
+        Self::from_file_bincode(preprocessed_file)
     }
 
     pub fn sum(&self) -> usize {
@@ -147,11 +253,17 @@ impl EncCoverage {
         total
     }
 
-    pub fn len(&self)  -> usize{
+    pub fn len(&self) -> usize {
         self.length
     }
 
-    fn score_single_difference(mine: &EncCoverageEntry, other: &EncCoverageEntry, result: &mut Vec<ResultRow>, min_score: f32, offset: u32) {
+    fn score_single_difference(
+        mine: &EncCoverageEntry,
+        other: &EncCoverageEntry,
+        result: &mut Vec<ResultRow>,
+        min_score: f32,
+        offset: u32,
+    ) {
         // this is a huge speed up for sparse bams.
         // and all rnaseqs are sparse, right
         let sa = mine.count_a;
@@ -168,8 +280,7 @@ impl EncCoverage {
         if oa == 0 && oc == 0 && og == 0 && ot == 0 {
             panic!("should not happen2");
         }
-        let (self_max, self_argmax) =
-            Coverage::single_log_likelihood_max_arg_max(sa, sc, sg, st);
+        let (self_max, self_argmax) = Coverage::single_log_likelihood_max_arg_max(sa, sc, sg, st);
         let ((other_max, other_argmax), other_self_argmax) =
             Coverage::single_log_likelihood_max_arg_max_plus_other(oa, oc, og, ot, self_argmax);
         if self_argmax == other_argmax {
@@ -215,21 +326,18 @@ impl EncCoverage {
             match (element_mine, element_other) {
                 (None, None) => return res,
                 (None, _) => return res,
-                (_, None,)  => return res,
-                (Some(m), Some(o)) => {
-                    match m.offset.cmp(&o.offset) {
-                        Ordering::Equal => {
-                            EncCoverage::score_single_difference(m, o, &mut res, min_score, offset);
-                            element_mine = iter_mine.next();
-                            element_other = iter_other.next();
-                        },
-                        Ordering::Less => element_mine = iter_mine.next(),
-                        Ordering::Greater => element_other = iter_other.next(),
-                        }
+                (_, None) => return res,
+                (Some(m), Some(o)) => match m.offset.cmp(&o.offset) {
+                    Ordering::Equal => {
+                        EncCoverage::score_single_difference(m, o, &mut res, min_score, offset);
+                        element_mine = iter_mine.next();
+                        element_other = iter_other.next();
                     }
-
-                }
+                    Ordering::Less => element_mine = iter_mine.next(),
+                    Ordering::Greater => element_other = iter_other.next(),
+                },
             }
+        }
     }
 }
 
@@ -238,8 +346,6 @@ impl std::fmt::Debug for EncCoverage {
         f.write_str("EncCoverage")
     }
 }
-
-
 
 impl Coverage {
     pub fn new(length: usize) -> Coverage {

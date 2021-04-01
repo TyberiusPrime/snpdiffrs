@@ -1,6 +1,6 @@
 use super::{all_files_exists, ensure_output_dir, get_logger, haplotype_const_to_str, RunConfig};
 use crate::chunked_genome::{Chunk, ChunkedGenome};
-use crate::coverage::{Coverage, ResultRow, EncCoverage};
+use crate::coverage::{Coverage, EncCoverage, ResultRow};
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -36,6 +36,38 @@ struct PreProcessRunner {
     filter_homo_polymer_threshold: Option<u8>,
 }
 
+pub fn name_folder(
+    sample_name: &str,
+    input_filenames: &Vec<PathBuf>,
+    block_size: usize,
+    quality_threshold: u8,
+    filter_homo_polymer_threshold: Option<u8>,
+) -> String {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::ffi::OsStrExt;
+    let mut hasher = Sha256::new();
+    for p in input_filenames {
+        hasher.update(p.as_os_str().as_bytes())
+    }
+    let hash = hasher.finalize();
+    format!(
+        "{}_bs={}_q={}_homo_polymer={}_{}",
+        sample_name,
+        block_size,
+        quality_threshold,
+        match filter_homo_polymer_threshold {
+            Some(x) => format!("{}", x),
+            None => "None".to_string(),
+        },
+        format!("{:x}", hash)
+    )
+    .to_string()
+}
+
+pub fn name_block(chr: &str, start: u32) -> String {
+    format!("{}_{}.snpdiffrs_block", chr, start)
+}
+
 impl PreProcessRunner {
     fn new(config: RunConfig, chunked_genome: ChunkedGenome) -> PreProcessRunner {
         //input
@@ -48,16 +80,13 @@ impl PreProcessRunner {
         let output_dir = Path::new(&config.output_dir);
         let output_directories = samples_and_input_filenames
             .iter()
-            .map(|(sample_name, _input_files)| {
-                let od = output_dir.join(format!(
-                    "{}_bs={}_q={}_homo_polymer={}.snpdiff_block",
+            .map(|(sample_name, input_files)| {
+                let od = output_dir.join(name_folder(
                     sample_name,
+                    input_files,
                     config.block_size,
                     config.quality_threshold,
-                    match config.filter_homo_polymer_threshold {
-                        Some(x) => format!("{}", x),
-                        None => "None".to_string(),
-                    }
+                    config.filter_homo_polymer_threshold,
                 ));
                 if !od.exists() {
                     std::fs::create_dir_all(&od).unwrap();
@@ -77,10 +106,6 @@ impl PreProcessRunner {
     }
 
     fn run(self) {
-        use byteorder::ByteOrder;
-        use byteorder::{LittleEndian, WriteBytesExt};
-        use std::io::BufWriter;
-
         let todo: Vec<(Arc<Vec<PathBuf>>, &Chunk, PathBuf)> = self
             .chunks
             .iter()
@@ -92,9 +117,7 @@ impl PreProcessRunner {
                         (
                             inputs.clone(),
                             chunk,
-                            od.join(
-                                format!("{}_{}.snpdiffrs_block", chunk.chr, chunk.start).to_owned(),
-                            ),
+                            od.join(name_block(&chunk.chr, chunk.start)),
                         )
                     })
             })
@@ -105,7 +128,7 @@ impl PreProcessRunner {
             .par_iter()
             .map(|(input_filenames, chunk, output_filename)| {
                 if !output_filename.exists() {
-                    //todo: remove low coverage regions for smaller files
+                    //note that no coverage regions get to be cov of 0 bytes
                     let cov = Coverage::from_bams(
                         &input_filenames
                             .as_ref()
@@ -119,36 +142,8 @@ impl PreProcessRunner {
                         &self.filter_homo_polymer_threshold,
                     );
                     let cov = EncCoverage::new(&cov);
-                    let mut raw: Vec<u8>= Vec::new();
-                    raw.write_u64::<LittleEndian>(cov.len() as u64).unwrap();
-                    for row in cov.entries {
-                        raw.write_u32::<LittleEndian>(row.offset).unwrap();
-                        raw.write_u16::<LittleEndian>(row.count_a).unwrap();
-                        raw.write_u16::<LittleEndian>(row.count_c).unwrap();
-                        raw.write_u16::<LittleEndian>(row.count_g).unwrap();
-                        raw.write_u16::<LittleEndian>(row.count_t).unwrap();
-                    }
-                    println!("{}, {}", chunk.chr, chunk.start);
-
-                    let fh = File::create(output_filename.clone())
-                        .expect(&format!("Unable to create file {:?}", output_filename));
-                    let fh = BufWriter::new(fh);
-                    zstd::stream::copy_encode(&raw[..], fh, 9).unwrap();
-
-
-
-                    /*
-
-                    //lz4_hc::compress_to_vec(data, &mut comp, lz4_hc::CLEVEL_DEFAULT)?;
-                    let mut fh = File::create(output_filename.clone())
-                        .expect(&format!("Unable to create file {:?}", output_filename));
-                    use safe_transmute::{transmute_to_bytes, SingleManyGuard};
-
-                    let raw = cov.into_raw_vec();
-                    let raw_v8: &[u8] = transmute_to_bytes(&raw[..]);
-                    //zstd::stream::copy_encode(raw_v8, fh, 9).unwrap();
-                    fh.write_all(raw_v8).unwrap();
-                    */
+                    cov.to_file(output_filename)
+                        .expect("Could not write to file");
                 }
             })
             .collect();

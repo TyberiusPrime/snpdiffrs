@@ -1,5 +1,5 @@
 use crate::chunked_genome::{Chunk, ChunkedGenome};
-use crate::coverage::{Coverage, ResultRow, EncCoverage};
+use crate::coverage::{Coverage, EncCoverage, ResultRow};
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -14,7 +14,7 @@ use progressing::{mapping::Bar as MappingBar, Baring};
 
 use crossbeam::thread;
 #[allow(unused_imports)]
-use slog::debug;
+use slog::{debug, info};
 
 use super::{all_files_exists, ensure_output_dir, get_logger, haplotype_const_to_str, RunConfig};
 
@@ -182,7 +182,7 @@ impl NtoNRunner {
         let max_concurrent_blocks =
             (input_filenames.len() + ncores as usize).max(ncores as usize * 3); //we need at least one per input_filename to create all pairs. And some bonus is helpful to avoid delays.
         let log = get_logger();
-        debug!(log,"max concurrent blocks {}", max_concurrent_blocks);
+        debug!(log, "max concurrent blocks {}", max_concurrent_blocks);
 
         NtoNRunner {
             samples,
@@ -265,7 +265,7 @@ impl NtoNRunner {
             "Expected number of output blocks: {}", expected_number_of_outputs
         );
         let mut blocks: Vec<Block> = Vec::new(); //the currently loaded blocks. I suppose those should no texceed max_concurrent_blocks
-        let remaining_outputs = Mutex::new(expected_number_of_outputs);
+        let remaining_outputs = std::sync::atomic::AtomicUsize::new(expected_number_of_outputs);
 
         thread::scope(|s| {
         let block_iterator = block_iterator.clone();
@@ -284,36 +284,51 @@ impl NtoNRunner {
                             debug!(log, "Loading {} {}", payload.chunk.chr, payload.chunk.start);
                             let cov: Option<EncCoverage> = match _self.preprocessed_dir.as_ref() {
                                 Some(pd) => {
-                                    let full_pd = pd.join(format!(
-                                        "{}_bs={}_q={}_homo_polymer={}.snpdiff_block",_self.samples[payload.sample_id],
+                                    let full_pd = pd.join(super::pre_process::name_folder(
+                                        &_self.samples[payload.sample_id],
+                                        &_self.input_filenames[payload.sample_id],
                                         _self.block_size,
                                         _self.quality_threshold,
-                                        match _self.filter_homo_polymer_threshold {
-                                                                Some(x) => format!("{}", x),
-                                                                None => "None".to_string(),
-                                    }));
-
-                                    let filename = full_pd.join(
-                                        format!("{}_{}.snpdiffrs_block",
-                                            payload.chunk.chr, payload.chunk.start));
+                                        _self.filter_homo_polymer_threshold));
+                                    let filename = full_pd.join(super::pre_process::name_block(&payload.chunk.chr, payload.chunk.start));
                                     if !filename.exists() {
-                                        println!("Could not load preprocessed data: {:?}", filename);
+                                        //info!(log, "Failed to load preprocessed from: {:?}", filename);
                                         None
                                     } else {
-                                        EncCoverage::from_preprocessed(&filename)
+                                        EncCoverage::from_file(&filename)
                                     }
                                 },
                                 None => None
                             };
                             let cov: EncCoverage = match cov {
                                 Some(cov) => cov,
-                                None => EncCoverage::new(&Coverage::from_bams(&_self.input_filenames[payload.sample_id].as_ref().iter().map(|x| x.as_path()).collect::<Vec<_>>(),
+                                None => {
+                                        let e = EncCoverage::new(&Coverage::from_bams(&_self.input_filenames[payload.sample_id].as_ref().iter().map(|x| x.as_path()).collect::<Vec<_>>(),
                                         payload.chunk.tid,
                                         payload.chunk.start,
                                         payload.chunk.stop,
                                         _self.quality_threshold,
                                         &_self.filter_homo_polymer_threshold,
-                                ))
+                                        ));
+                                        if let Some(pd) = _self.preprocessed_dir.as_ref() {
+                                            let full_pd = pd.join(super::pre_process::name_folder(
+                                                &_self.samples[payload.sample_id],
+                                                &_self.input_filenames[payload.sample_id],
+                                                _self.block_size,
+                                                _self.quality_threshold,
+                                                _self.filter_homo_polymer_threshold));
+                                            if !full_pd.exists() {
+                                                std::fs::create_dir_all(&full_pd).unwrap();
+                                            }
+                                            let filename = full_pd.join(super::pre_process::name_block(&payload.chunk.chr, payload.chunk.start));
+                                            info!(log, "Rebuilding preprocessed block: {:?}", filename);
+                                            //with writing: 45.19
+                                            //without: 26s.
+                                            //after writing: 3s
+                                            e.to_file(&filename).expect("Could not write preprocessed file");
+                                        }
+                                        e
+                                }
                             };
 
 
@@ -452,10 +467,9 @@ impl NtoNRunner {
                             }
                         },
                     MsgDone::OutputDone => {
-                        let mut rr = remaining_outputs.lock().unwrap();
-                            *rr -= 1;
-                                debug!(log, "MsgDone:OutputDone - remaining outputs {}", *rr);
-                            if *rr == 0 {
+                            let rr = remaining_outputs.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                            debug!(log, "MsgDone:OutputDone - remaining outputs {}", rr);
+                            if rr == 1 { //previous value!
                                 debug!(log, "all expected outputs done");
                                 break
                             };

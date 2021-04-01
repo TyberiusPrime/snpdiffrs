@@ -11,12 +11,22 @@ mod runner;
 extern crate lazy_static;
 use libc::{prctl, PR_SET_PDEATHSIG};
 use nix::sys::signal::SIGTERM;
+use std::panic;
 
 fn main() {
     //die if the parent process is killed.
     unsafe {
         prctl(PR_SET_PDEATHSIG, SIGTERM);
     }
+
+    //die if a panic occurs in any thread
+    let orig_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        // invoke the default handler and exit the process
+        orig_hook(panic_info);
+        std::process::exit(1);
+    }));
+
     use std::env;
     let args: Vec<String> = env::args().collect();
     let toml = if args.contains(&"--large".to_owned()) {
