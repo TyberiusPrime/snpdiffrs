@@ -4,3 +4,4 @@ perf.data
 perf.data.old
 flame.svg
 examples/*/output
+examples/*/cache

@@ -1,0 +1,24 @@
+output_dir = 'examples/n_to_m_with_preprocessor/output'
+preprocessed_dir = 'examples/n_to_m_with_preprocessor/cache'
+mode = "NToM"
+
+[queries]
+	#As = ['sample_data/ERR329501_chr4.bam']
+    Bs = ['sample_data/GSM1553106_chr4.bam']
+	#A = ['sample_data/ERR329501.bam']
+	
+[references]
+    #Bs = ['sample_data/GSM1553106_chr4.bam']
+    #As = ['sample_data/ERR329501_chr4.bam']
+    #Bs = ['sample_data/GSM1553106_chr4.bam']
+	#A = ['sample_data/ERR329501.bam']
+    B = ['sample_data/GSM1553106.bam']
+
+
+
+# 2274600 - preproce
+#  190276
+# 3752... something wrong?
+
+# 194480
+#2330860

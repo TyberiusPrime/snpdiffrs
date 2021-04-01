@@ -18,7 +18,7 @@ use rayon::prelude::*;
 */
 
 pub fn run_preprocess(config: RunConfig) -> Result<(), ()> {
-    all_files_exists(&config.samples);
+    all_files_exists(&config.samples, "samples");
     ensure_output_dir(&Path::new(&config.output_dir));
 
     let chunks = ChunkedGenome::new(config.first_bam(), &config.chromosomes);

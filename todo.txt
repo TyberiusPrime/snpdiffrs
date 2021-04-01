@@ -3,3 +3,5 @@
 * read preprocessed files instead
 * check how well the logs are done (can you redo the output from the input+output log?)
 * one to n mode
+* make sample data reproducile
+* fix GSM1553106.bam - it's actuall ERR329500, apperantly??
